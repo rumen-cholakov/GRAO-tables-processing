@@ -8,11 +8,11 @@ assignees: ''
 
 ---
 
-### <Title>
+## <Title>
 
-## Description:
+### Description:
 A short description
 
-## Acceptance criteria
+### Acceptance criteria
 
 - [ ] A list of subtasks that need to be complete for the task to be considered one>
