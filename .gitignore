@@ -127,3 +127,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+grao_data_picled/combined_tables.pkl
+grao_data_picled/data_frames_list_disambiguated.pkl
+grao_data_picled/data_frames_list.pkl
+grao_data_picled/failiures.pkl
