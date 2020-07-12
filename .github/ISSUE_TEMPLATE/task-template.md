@@ -8,9 +8,10 @@ assignees: ''
 
 ---
 
-## <Title>
+## {Title}
 
-### Description:
+### Description
+
 A short description
 
 ### Acceptance criteria
