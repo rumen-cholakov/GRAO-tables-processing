@@ -64,6 +64,7 @@ class RegexPatternWrapper(metaclass=Singleton):
 
     self.year_group = '(\d{4})'
     self.date_group = '(\d{2}-\d{4})'
+    self.full_date_group = '(\d{2}-\d{2}-\d{4})'
 
     name_part = f'[\s|-]*{cap_letter}*'
     name_part_old = f'[\.|\s|-]{cap_letter}*'
@@ -126,23 +127,25 @@ class Configuration(object):
                processed_tables_path,
                matched_tables_path,
                combined_tables_path,
-               pickled_data_path):
+               pickled_data_path,
+               credentials_path):
     self.data_configuration_path = data_configuration_path
     self.processed_tables_path = processed_tables_path
     self.matched_tables_path = matched_tables_path
     self.combined_tables_path = combined_tables_path
     self.pickled_data_path = pickled_data_path
+    self.credentials_path = credentials_path
     self.extra_params = {}
 
-  def process_data_configuration(self) -> List[DataTuple]:
     with open(self.data_configuration_path) as file:
-      data = json.load(file)
+      self.data = json.load(file)
 
-      output = []
-      for entry in data:
-        output.append(self._data_tuple_from_entry(entry))
+  def process_data_configuration(self) -> List[DataTuple]:
+    output = []
+    for entry in self.data:
+      output.append(self._data_tuple_from_entry(entry))
 
-      return output
+    return output
 
   def _data_tuple_from_entry(self, entry: str) -> DataTuple:
     if regex.search(RegexPatternWrapper().date_group, entry) is not None:
@@ -245,8 +248,6 @@ def fix_names(name: str) -> str:
 
 """## Settlement Disambiguation Pipeline"""
 
-oldest_record_date = datetime.datetime.strptime('31.12.1899', '%d.%m.%Y')
-
 def fetch_raw_settlement_data(settlement: SettlementDataTuple) -> SettlementDataTuple:
   name = settlement.data
 
@@ -271,6 +272,7 @@ def parse_raw_settlement_data(settlement: SettlementDataTuple) -> SettlementData
   data = defaultdict(list)
   last_key = ''
 
+  oldest_record_date = datetime.datetime.strptime('31.12.1899', '%d.%m.%Y')
   for row in table.find_all('tr')[2:]:
     cells = row.find_all('td')
     num_cells = len(cells)
@@ -745,51 +747,173 @@ def create_visualizations():
     plt.close('all')
     # break
 
-"""# Update bot"""
+"""## Matching data with QID"""
 
-def login_with_credentials(credentials_path):
-  credentials = pd.read_csv(credentials_path)
+def find_ref_url(path_to_file: str, file_prefix: str, url_list: List[str]) -> str:
+  processing_pipline = Pipeline((
+    os.path.basename,
+    (lambda name: name.split('.')[0]),
+    (lambda name: name.replace(file_prefix, '')),
+    (lambda name: name.replace('_', '-')),
+    (lambda date_str: next(filter((lambda url: url.find(date_str) > -1), url_list))),
+  ))
+
+  result = processing_pipline(path_to_file)
+  return result
+
+def date_from_url(url: str) -> datetime.datetime:
+  date_str = ''
+
+  date_group = regex.search(RegexPatternWrapper().full_date_group, url)
+  if date_group is not None:
+    date_str = date_group.group(1)
+  else:
+    date_group = regex.search(RegexPatternWrapper().year_group, url)
+    if date_group is not None:
+      date_str = date_group.group(1)
+      date_str = f'31-12-{date_str}'
+
+  date = datetime.datetime.strptime(date_str, '%d-%m-%Y')
+
+  return date
+
+def file_prefix_for_directory(directory: str):
+  return f'{os.path.basename(directory)}_'
+
+def find_date_sufix(url: str) -> str:
+    date = date_from_url(url)
+    date_sufix = f'{date.year}'
+
+    if date.day != 31 and date.month != 12:
+      date_sufix = f'{date.month:02}_{date_sufix}'
+
+    return date_sufix
+
+def find_latest_processed_file_info(storage_directory: str, url_list) -> (datetime.datetime, str, str):
+  processed_files = []
+
+  file_prefix = file_prefix_for_directory(storage_directory)
+
+  for file in os.listdir(storage_directory):
+    url = find_ref_url(file, file_prefix, url_list)
+    date = date_from_url(url)
+    processed_files.append((date, url, os.path.join(storage_directory, file)))
+
+  processed_files = sorted(processed_files)
+  return processed_files[-1]
+
+def dict_from_csv(csv_path: str, index_name: str) -> dict:
+  return pd.read_csv(csv_path, dtype=np.str).set_index(index_name).to_dict(orient='index')
+
+def update_matched_data(config: Configuration):
+
+  matched_data_time, matched_data_url, matched_data_path = find_latest_processed_file_info(config.matched_tables_path, config.data)
+  grao_data_time, grao_data_url, grao_data_path = find_latest_processed_file_info(config.processed_tables_path, config.data)
+
+  if grao_data_time <= matched_data_time:
+    return
+
+  date_sufix = find_date_sufix(grao_data_url)
+
+  matched_data_dict = dict_from_csv(matched_data_path, index_name='ekatte')
+  grao_data_dict = dict_from_csv(grao_data_path, index_name='ekatte')
+
+  new_matched_data = {}
+  for key, value in matched_data_dict.items():
+    new_matched_data[key] = value
+    new_matched_data[key]['permanent_population'] = grao_data_dict[key][f'permanent_{date_sufix}']
+    new_matched_data[key]['current_population'] = grao_data_dict[key][f'current_{date_sufix}']
+
+  new_matched_df = pd.DataFrame.from_dict(new_matched_data, orient='index', dtype=np.str).reset_index()
+  new_matched_df.rename(columns={'index': 'ekatte'}, inplace=True)
+  new_matched_df.to_csv(f'{config.matched_tables_path}/{file_prefix_for_directory(config.matched_tables_path)}{date_sufix}.csv', index=False)
+
+"""## Update bot"""
+
+def login_with_credentials(credentials_path: str) -> wdi_login.WDLogin:
+  credentials: pd.DataFrame = pd.read_csv(credentials_path)
   username, password = tuple(credentials)
 
   return wdi_login.WDLogin(username, password)
 
-def update_item(login, settlement_qid, population):
-    ref = wdi_core.WDUrl(prop_nr="P854", value="https://www.grao.bg/tna/t41nm-15-06-2020_2.txt", is_reference=True)
+def update_item(login: wdi_login.WDLogin, settlement_qid: str, data: wdi_core.WDQuantity):
+  item = wdi_core.WDItemEngine(wd_item_id=settlement_qid, data=data)
+  item.write(login, False)
+  time.sleep(15)
 
-    determination_method = wdi_core.WDItemID(value='Q90878157', prop_nr="P459", is_qualifier=True)
-    point_in_time = wdi_core.WDTime(time='+2020-06-15T00:00:00Z', prop_nr='P585', is_qualifier=True)
-    # publisher = wdi_core.WDItemID(value=login.consumer_key, prop_nr="P123", is_reference=True)
+def update_all_settlements(config: Configuration):
+  login = login_with_credentials(config.credentials_path)
 
-    qualifiers = []
-    qualifiers.append(point_in_time)
-    qualifiers.append(determination_method)
-    data = []
-    prop = wdi_core.WDQuantity(prop_nr='P1082', value=population, qualifiers=qualifiers, references=[[ref]])
-    data.append(prop)
+  ref_time, ref_url, path = find_latest_processed_file_info(config.matched_tables_path, config.data)
 
-    item = wdi_core.WDItemEngine(wd_item_id=settlement_qid, data=data)
-    item.write(login, False)
-    time.sleep(15)
+  ref = wdi_core.WDUrl(prop_nr="P854", value=ref_url, is_reference=True)
+  # publisher = wdi_core.WDItemID(value=login.consumer_key, prop_nr="P123", is_reference=True)
 
-def update_all_settlements():
-  data = pd.read_csv("matched_data/matched_data.csv")
-  data.columns = ['ekatte', 'region', 'municipality', 'settlement', 'pop_permanent', 'pop_current']
+  ref_time_str = f'+{ref_time.isoformat()}Z'
+  point_in_time = wdi_core.WDTime(time=ref_time_str, prop_nr='P585', is_qualifier=True)
+  determination_method = wdi_core.WDItemID(value='Q90878157', prop_nr="P459", is_qualifier=True)
 
-  login = login_with_credentials('data/credentials.csv')
+  qualifiers = [point_in_time, determination_method]
 
   error_logs = []
-  for _, row in data.iterrows():
-      try:
-          settlement_qid = row['settlement']
-          population = row['pop_permanent']
-          update_item(login, settlement_qid, population)
-      except:
-          error_logs.append(settlement_qid)
-          print("An error occured for item : " + settlement_qid)
 
-  print("Summarizing failures for specific IDs")
-  for error in error_logs:
+  data = pd.read_csv(path)
+  for _, row in data.iterrows():
+    settlement_qid = row['settlement']
+    population = row['permanent_population']
+    prop = wdi_core.WDQuantity(
+      prop_nr='P1082',
+      value=population,
+      qualifiers=qualifiers,
+      references=[[ref]]
+    )
+
+    try:
+      update_item(login, settlement_qid, [prop])
+    except:
+      error_logs.append(settlement_qid)
+      print("An error occured for item : " + settlement_qid)
+
+  if len(error_logs) > 0:
+    print("Summarizing failures for specific IDs")
+    for error in error_logs:
       print("Error for : " + error)
+
+"""## Input validation """
+
+def input_validation_callback(message: str, return_vale: T = None, action: Callable[[], T] = None) -> T:
+  print(message)
+  result = None
+
+  if action is not None:
+    result = action()
+
+  if return_vale is not None:
+    result = return_vale
+
+  return result
+
+def make_dir(path: str) -> bool:
+  result = input_validation_callback(
+    f'Creating directory at path: {path}',
+    return_vale=True,
+    action=(lambda: os.makedirs(path))
+  )
+
+  return result
+
+def signal_for_missing_file(path: str) -> bool:
+  result = input_validation_callback(
+    f'ERROR: File at {path} is missing!!!',
+    return_vale=False
+  )
+
+  return result
+
+def validate_input(input_list: List[Tuple[str, Callable[[str], bool], Callable[[str], bool]]]) -> bool:
+  results = [action(path) for path, action, check in input_list if not check(path)]
+
+  return all(results)
 
 def main():
 
@@ -799,11 +923,12 @@ def main():
     python3  grao_tables_processing.py
 
     python3  grao_tables_processing.py
-      --data_configuration_path <path to folder>
+      --data_configuration_path <path to file>
       --processed_tables_path <path to folder>
       --matched_tables_path <path to folder>
       --combined_tables_path <path to folder>
       --pickled_data_path <path to folder>
+      --credentials_path <path to file>
       --produce_graphics
       --update_wiki_data
   """
@@ -816,7 +941,7 @@ def main():
                       type=str, default=f'{current_dir}/config/data_config.json',
                       help="Path to the JSON file containing the configuration for which tables should be processed.")
   parser.add_argument("--processed_tables_path",
-                      type=str, default=f'{current_dir}/processed_tables',
+                      type=str, default=f'{current_dir}/grao_data',
                       help="Path to the folder where the processed tables will be stored.")
   parser.add_argument("--matched_tables_path",
                       type=str, default=f'{current_dir}/matched_data',
@@ -827,6 +952,9 @@ def main():
   parser.add_argument("--pickled_data_path",
                       type=str, default=f'{current_dir}/pickled_data',
                       help="Path to the folder where pickled objects will be stored.")
+  parser.add_argument("--credentials_path",
+                      type=str, default=f'{current_dir}/credentials/wd_credentials.csv',
+                      help="Path to the file containing credentials.")
   parser.add_argument("--produce_graphics",
                       default=False, action="store_true",
                       help="If set the script will produce grafics from the processed tables.")
@@ -834,8 +962,20 @@ def main():
                       default=False, action="store_true",
                       help="If set the script will update WikiData with the processed tables.")
 
-
   args = parser.parse_args()
+
+  validation_result = validate_input([
+    (args.data_configuration_path, signal_for_missing_file, os.path.exists),
+    (args.processed_tables_path, make_dir, os.path.exists),
+    (args.matched_tables_path, make_dir, os.path.exists),
+    (args.combined_tables_path, make_dir, os.path.exists),
+    (args.pickled_data_path, make_dir, os.path.exists),
+    (args.credentials_path, signal_for_missing_file, os.path.exists)
+  ])
+
+  if not validation_result:
+    exit(1)
+
   PickleWrapper(args.pickled_data_path)
 
   configuration = Configuration(
@@ -843,7 +983,8 @@ def main():
     args.processed_tables_path,
     args.matched_tables_path,
     args.combined_tables_path,
-    args.pickled_data_path
+    args.pickled_data_path,
+    args.credentials_path
   )
 
   settlement_disambiguation = Pipeline(functions=(
@@ -862,7 +1003,6 @@ def main():
   ))
   configuration.extra_params['table_parsing'] = table_parsing
 
-
   processing_pipeline = Pipeline(functions=(
     (lambda data: process_data(data, configuration)),
     (lambda data: disambiguate_data(data, configuration)),
@@ -879,8 +1019,8 @@ def main():
     create_visualizations()
 
   if args.update_wiki_data:
-    update_all_settlements()
-
+    update_matched_data(configuration)
+    update_all_settlements(configuration)
 
 if __name__ == "__main__":
   main()
