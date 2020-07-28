@@ -22,7 +22,7 @@ from typing import TypeVar, Callable, Sequence, List, Optional, Tuple
 from collections import namedtuple, defaultdict
 from functools import reduce
 from itertools import groupby, chain
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from bs4 import BeautifulSoup
 from wikidataintegrator import wdi_core, wdi_login
@@ -131,12 +131,18 @@ class Configuration(object):
   combined_tables_path: str
   pickled_data_path: str
   credentials_path: str
-  extra_params: str = {}
   data: List[str] = field(init=False)
+  _extra_params: dict = field(default_factory=dict)
 
   def __post_init__(self):
     with open(self.data_configuration_path) as file:
       self.data = json.load(file)
+
+  def __getitem__(self, name):
+    return self._extra_params.get(name, None)
+
+  def __setitem__(self, name, value):
+    self._extra_params[name] = value
 
   def process_data_configuration(self) -> List[DataTuple]:
     output = []
@@ -469,7 +475,7 @@ def full_info_list_to_data_frame(data_tuple: DataTuple) -> DataTuple:
 def process_data(data_source: List[DataTuple], config: Configuration) -> List[DataTuple]:
   parsed_data = None
   data_frame_list = []
-  parsing_pipeline = config.extra_params['table_parsing']
+  parsing_pipeline = config['table_parsing']
 
   for data_tuple in data_source:
     if data_tuple.table_type == TableTypeEnum.Quarterly:
@@ -490,7 +496,7 @@ def process_data(data_source: List[DataTuple], config: Configuration) -> List[Da
 
 def disambiguate_data(data_frame_list: List[DataTuple], config: Configuration) -> List[DataTuple]:
 
-  settlement_disambiguation_pipeline = config.extra_params['settlement_disambiguation']
+  settlement_disambiguation_pipeline = config['settlement_disambiguation']
 
   processed_sdts = PickleWrapper().load_data('triple_to_ekatte')
   if (processed_sdts is None) or (not isinstance(processed_sdts, dict)):
@@ -1014,7 +1020,7 @@ def main():
     parse_raw_settlement_data,
     mach_key_with_code
   ))
-  configuration.extra_params['settlement_disambiguation'] = settlement_disambiguation
+  configuration['settlement_disambiguation'] = settlement_disambiguation
 
   table_parsing = Pipeline(functions=(
     fetch_raw_table,
@@ -1023,7 +1029,7 @@ def main():
     parssed_lines_to_full_info_list,
     full_info_list_to_data_frame,
   ))
-  configuration.extra_params['table_parsing'] = table_parsing
+  configuration['table_parsing'] = table_parsing
 
   processing_pipeline = Pipeline(functions=(
     (lambda data: process_data(data, configuration)),
