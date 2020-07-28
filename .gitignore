@@ -127,10 +127,14 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Files produced by script
 pickled_data/combined_tables.pkl
 pickled_data/data_frames_list_disambiguated.pkl
 pickled_data/data_frames_list.pkl
 pickled_data/failiures.pkl
+
+visualizations/*
 
 # VSCode
 .vscode/
