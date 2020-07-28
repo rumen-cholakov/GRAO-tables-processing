@@ -129,6 +129,7 @@ class Configuration(object):
   processed_tables_path: str
   matched_tables_path: str
   combined_tables_path: str
+  visualizations_path: str
   pickled_data_path: str
   credentials_path: str
   data: List[str] = field(init=False)
@@ -632,7 +633,7 @@ def store_combined_data(processed_data: List[DataTuple], config: Configuration) 
 
 """## Visualizations"""
 
-def autolabel(rects):
+def autolabel(ax, rects):
     """Attach a text label above each bar in *rects*, displaying its height."""
     for rect in rects:
         height = rect.get_height()
@@ -642,114 +643,108 @@ def autolabel(rects):
                     textcoords="offset points",
                     ha='center', va='bottom')
 
-def create_visualizations():
+def load_processed_data() -> (dict, dict):
   ekatte_to_triple = PickleWrapper().load_data('ekatte_to_triple')
-  triple_to_ekatte = PickleWrapper().load_data('triple_to_ekatte')
   combined         = PickleWrapper().load_data('combined_tables')
-
   combined_dict    = combined.to_dict(orient='index')
 
-  plt.rcParams['figure.figsize'] = [45, 15]
+  return ekatte_to_triple, combined_dict
 
-  visualisaion_directory = 'visualization'
+def path_for_settlement_graphic(directory: str, name: str, sufix: str = '') -> str:
+  modified_name = name.replace('.', '').replace(' ', '_')
+
+  if sufix == '_':
+    sufix = ''
+
+  return f'{directory}/{modified_name}{sufix}'
+
+def prepare_directory(triple: Tuple[str, str, str], base: str) -> str:
+  sub_path = f'{triple[0]}/{triple[1]}'.replace(' ', '_')
+  full_path = f'{base}/{sub_path}'
+
+  if not os.path.exists(full_path):
+      os.makedirs(full_path)
+
+  return full_path
+
+def clear_figure():
+  # Clear the current axes.
+  plt.cla()
+
+  # Clear the current figure.
+  plt.clf()
+  plt.ioff()
+
+def draw_plot(directory: str, plot_name: str, type_name: str):
+  plt_path = path_for_settlement_graphic(directory, plot_name.split(',')[-1].strip(), f'_{type_name.lower()}')
+  plt.savefig(plt_path)
+  print(plt_path)
+  clear_figure()
+
+def plot_single_value(directory: str, plot_name: str, values: List[int], labels: List[str], type_name: str = ''):
+  _, ax  = plt.subplots()
+
+  xticks = np.arange(len(labels))
+  width  = 0.4
+
+  # Add some text for labels, title and custom x-axis tick labels, etc.
+  ax.set_ylabel('Number of residents')
+  ax.set_xticks(xticks)
+  ax.set_xticklabels(labels)
+  ax.set_title(plot_name)
+
+  rects = ax.bar(xticks - width/20, values, width, label=type_name.capitalize(), align='center')
+  autolabel(ax, rects)
+
+  ax.legend()
+
+  draw_plot(directory, plot_name, type_name)
+
+def plot_comparison(directory: str, settlement_name: str, values_list: List[List[int]], labels: List[str], type_name: str = ''):
+  _, ax = plt.subplots()
+  xticks = np.arange(len(labels))
+
+  ax.set_xticks(xticks)
+  ax.set_xticklabels(labels)
+
+  for values in values_list:
+    plt.plot(values)
+
+  plt.title('Comparison between permanent and current')
+  plt.xlabel('Year')
+  plt.ylabel('Number of residents')
+  plt.legend(['Permanent', 'Current'], loc='upper right')
+
+  draw_plot(directory, settlement_name, type_name)
+
+def create_visualizations(config: Configuration):
+  ekatte_to_triple, combined_dict = load_processed_data()
+
+  plt.rcParams['figure.figsize'] = [45, 15]
 
   labels = list(combined_dict[list(combined_dict.keys())[0]].keys())
   date_labels = list(map(lambda l: ' '.join(l.split('_')[1:]),labels[0::2]))
   date_labels.reverse()
 
-  x = np.arange(len(date_labels))  # the label locations
-  width = 0.4  # the width of the bars
-
   for item in combined_dict:
     triple = ekatte_to_triple[item]
-    save_dir = f'{visualisaion_directory}/{triple[0]}/{triple[1]}'.replace(' ', '_')
-    full_path = f'{os.getcwd()}/{save_dir}'
-
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-
-    plt_path_permanent = f'{full_path}/{triple[2]}_permanent'.replace('.', '').replace(' ', '_')
-    plt_path_current = f'{full_path}/{triple[2]}_current'.replace('.', '').replace(' ', '_')
-    plt_path_compare = f'{full_path}/{triple[2]}_compare'.replace('.', '').replace(' ', '_')
     name = f'обл. {triple[0]}, общ. {triple[1]}, {triple[2]}'
-
-    fig, ax = plt.subplots()
-
-    # Add some text for labels, title and custom x-axis tick labels, etc.
-    ax.set_ylabel('Number of residents')
-    ax.set_xticks(x)
-    ax.set_xticklabels(date_labels)
-    ax.set_title(name)
+    full_path = prepare_directory(triple, config.visualizations_path)
 
     values = list(combined_dict[item].values())
 
     permanent_values = values[0::2]
     permanent_values.reverse()
-
-    rects1 = ax.bar(x - width/20, permanent_values, width, label='Permanent', align='center')
-    autolabel(rects1)
-
-    ax.legend()
-
-    plt.savefig(plt_path_permanent)
-    print(plt_path_permanent)
-
-    # Clear the current axes.
-    plt.cla()
-
-    # Clear the current figure.
-    plt.clf()
-    plt.ioff()
-
-    fig, ax = plt.subplots()
-
-    # Add some text for labels, title and custom x-axis tick labels, etc.
-    ax.set_ylabel('Number of residents')
-    ax.set_xticks(x)
-    ax.set_xticklabels(date_labels)
-    ax.set_title(name)
+    plot_single_value(full_path, name, permanent_values, date_labels, 'permanent')
 
     current_values = values[1::2]
     current_values.reverse()
+    plot_single_value(full_path, name, current_values, date_labels, 'current')
 
-    rects2 = ax.bar(x + width/20, current_values, width, label='Current', align='center')
-    autolabel(rects2)
-
-    ax.legend()
-
-    plt.savefig(plt_path_current)
-    print(plt_path_current)
-
-    # Clear the current axes.
-    plt.cla()
-
-    # Clear the current figure.
-    plt.clf()
-    plt.ioff()
-
-    fig, ax = plt.subplots()
-    ax.set_xticks(x)
-    ax.set_xticklabels(date_labels)
-    plt.plot(permanent_values)
-    plt.plot(current_values)
-
-    plt.title('Comparison between permanent and current')
-    plt.xlabel('Year')
-    plt.ylabel('Number of residents')
-    plt.legend(['Permanent', 'Current'], loc='upper right')
-
-    plt.savefig(plt_path_compare)
-    print(plt_path_compare)
-
-    # Clear the current axes.
-    plt.cla()
-    # Clear the current figure.
-    plt.clf()
-    plt.ioff()
+    plot_comparison(full_path, name, [permanent_values, current_values], date_labels, 'compare')
 
     # Closes all the figure windows.
     plt.close('all')
-    # break
 
 """## Matching data with QID"""
 
@@ -943,6 +938,7 @@ def main():
       --processed_tables_path <path to folder>
       --matched_tables_path <path to folder>
       --combined_tables_path <path to folder>
+      --visualizations_path <path to folder>
       --pickled_data_path <path to folder>
       --credentials_path <path to file>
       --produce_graphics
@@ -964,6 +960,9 @@ def main():
                       help="Path to the folder where the matched tables are be stored.")
   parser.add_argument("--combined_tables_path",
                       type=str, default=f'{current_dir}/combined_tables',
+                      help="Path to the folder where the combined tables will be stored.")
+  parser.add_argument("--visualizations_path",
+                      type=str, default=f'{current_dir}/visualizations',
                       help="Path to the folder where the combined tables will be stored.")
   parser.add_argument("--pickled_data_path",
                       type=str, default=f'{current_dir}/pickled_data',
@@ -993,6 +992,9 @@ def main():
     ValidationItem(args.combined_tables_path,
                    make_dir,
                    os.path.exists),
+    ValidationItem(args.visualizations_path,
+                   make_dir,
+                   os.path.exists),
     ValidationItem(args.pickled_data_path,
                    make_dir,
                    os.path.exists),
@@ -1011,6 +1013,7 @@ def main():
     args.processed_tables_path,
     args.matched_tables_path,
     args.combined_tables_path,
+    args.visualizations_path,
     args.pickled_data_path,
     args.credentials_path
   )
@@ -1044,7 +1047,7 @@ def main():
   processed_data = processing_pipeline(data_source)
 
   if args.produce_graphics:
-    create_visualizations()
+    create_visualizations(configuration)
 
   if args.update_wiki_data:
     update_matched_data(configuration)
