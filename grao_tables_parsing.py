@@ -22,6 +22,7 @@ from typing import TypeVar, Callable, Sequence, List, Optional, Tuple
 from collections import namedtuple, defaultdict
 from functools import reduce
 from itertools import groupby, chain
+from dataclasses import dataclass
 
 from bs4 import BeautifulSoup
 from wikidataintegrator import wdi_core, wdi_login
@@ -46,6 +47,7 @@ PopulationInfo = namedtuple('PopulationInfo', 'permanent current')
 ParsedLines = namedtuple('ParsedLines', 'municipality_ids settlements_info')
 
 T = TypeVar('T')
+U = TypeVar('U')
 
 class Singleton(type):
     _instances = {}
@@ -121,22 +123,18 @@ class Pipeline(object):
     '''
     return reduce(lambda v, f: f(v), function_pipeline, value)
 
+@dataclass
 class Configuration(object):
-  def __init__(self,
-               data_configuration_path,
-               processed_tables_path,
-               matched_tables_path,
-               combined_tables_path,
-               pickled_data_path,
-               credentials_path):
-    self.data_configuration_path = data_configuration_path
-    self.processed_tables_path = processed_tables_path
-    self.matched_tables_path = matched_tables_path
-    self.combined_tables_path = combined_tables_path
-    self.pickled_data_path = pickled_data_path
-    self.credentials_path = credentials_path
-    self.extra_params = {}
+  data_configuration_path: str
+  processed_tables_path: str
+  matched_tables_path: str
+  combined_tables_path: str
+  pickled_data_path: str
+  credentials_path: str
+  extra_params: str = {}
+  data: List[str] = field(init=False)
 
+  def __post_init__(self):
     with open(self.data_configuration_path) as file:
       self.data = json.load(file)
 
@@ -165,14 +163,14 @@ def static_vars_function(**kwargs):
       return func
   return decorate
 
-def fetch_raw_data(url: str):
+def fetch_raw_data(url: str, encoding: str = 'windows-1251'):
   headers = requests.utils.default_headers()
   headers.update({
       'User-Agent': 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:52.0) Gecko/20100101 Firefox/52.0'
   })
 
   req = requests.get(url, headers)
-  req.encoding = 'windows-1251'
+  req.encoding = encoding
 
   return req
 
@@ -881,6 +879,18 @@ def update_all_settlements(config: Configuration):
 
 """## Input validation """
 
+@dataclass
+class ValidationItem:
+  parameter: T
+  action: Callable[[T], U]
+  check: Callable[[T], bool]
+
+  def execute_action(self):
+    return self.action(self.parameter)
+
+  def execute_check(self):
+    return self.check(self.parameter)
+
 def input_validation_callback(message: str, return_vale: T = None, action: Callable[[], T] = None) -> T:
   print(message)
   result = None
@@ -910,8 +920,8 @@ def signal_for_missing_file(path: str) -> bool:
 
   return result
 
-def validate_input(input_list: List[Tuple[str, Callable[[str], bool], Callable[[str], bool]]]) -> bool:
-  results = [action(path) for path, action, check in input_list if not check(path)]
+def validate_input(input_list: List[ValidationItem]) -> bool:
+  results = [validation_item.execute_action() for validation_item in input_list if not validation_item.execute_check()]
 
   return all(results)
 
@@ -965,12 +975,24 @@ def main():
   args = parser.parse_args()
 
   validation_result = validate_input([
-    (args.data_configuration_path, signal_for_missing_file, os.path.exists),
-    (args.processed_tables_path, make_dir, os.path.exists),
-    (args.matched_tables_path, make_dir, os.path.exists),
-    (args.combined_tables_path, make_dir, os.path.exists),
-    (args.pickled_data_path, make_dir, os.path.exists),
-    (args.credentials_path, signal_for_missing_file, os.path.exists)
+    ValidationItem(args.data_configuration_path,
+                   signal_for_missing_file,
+                   os.path.exists),
+    ValidationItem(args.processed_tables_path,
+                   make_dir,
+                   os.path.exists),
+    ValidationItem(args.matched_tables_path,
+                   make_dir,
+                   os.path.exists),
+    ValidationItem(args.combined_tables_path,
+                   make_dir,
+                   os.path.exists),
+    ValidationItem(args.pickled_data_path,
+                   make_dir,
+                   os.path.exists),
+    ValidationItem(args.credentials_path,
+                   signal_for_missing_file,
+                   os.path.exists)
   ])
 
   if not validation_result:
