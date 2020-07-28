@@ -16,4 +16,4 @@ A short description
 
 ### Acceptance criteria
 
-- [ ] A list of subtasks that need to be complete for the task to be considered one>
+- [ ] A list of subtasks that need to be complete for the task to be considered done
