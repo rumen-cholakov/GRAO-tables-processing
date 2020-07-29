@@ -1,0 +1,10 @@
+beautifulsoup4==4.6.0
+html5lib==0.999999999
+isodate==0.6.0
+lxml==4.5.2
+matplotlib==3.3.0
+numpy==1.19.1
+pandas==1.0.5
+requests==2.24.0
+urllib3==1.25.10
+wikidataintegrator==0.7.4
