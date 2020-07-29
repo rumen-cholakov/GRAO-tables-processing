@@ -10,6 +10,7 @@ import datetime
 import requests
 import urllib
 import pickle
+import random
 import regex
 import time
 import enum
@@ -24,6 +25,7 @@ from dataclasses import dataclass, field
 
 from bs4 import BeautifulSoup
 from wikidataintegrator import wdi_core, wdi_login
+from joblib import Parallel, delayed
 
 """## Type Declarations"""
 
@@ -423,8 +425,11 @@ def parse_data_line(line: str, table_type: TableTypeEnum) -> Optional[Settlement
   return settlement_info
 
 
-@static_vars_function(region=None)
-def parse_header_line(line: str, header_type: HeaderEnum) -> Optional[MunicipalityIdentifier]:
+def parse_header_line(
+  line: str,
+  header_type: HeaderEnum,
+  old_header_state: Optional[T]
+) -> Tuple[Optional[MunicipalityIdentifier], Optional[T]]:
   region_name = None
 
   if header_type == HeaderEnum.New:
@@ -435,26 +440,27 @@ def parse_header_line(line: str, header_type: HeaderEnum) -> Optional[Municipali
       region_name = MunicipalityIdentifier(region.strip(), municipality.strip())
 
   elif header_type == HeaderEnum.Old:
-    if parse_header_line.region is None:
-      parse_header_line.region = regex.search(RegexPatternWrapper().old_reg, line)
+    if old_header_state is None:
+      old_header_state = regex.search(RegexPatternWrapper().old_reg, line)
       region_name = None
     else:
       mun_gr = regex.search(RegexPatternWrapper().old_mun, line)
       if mun_gr:
-        region, municipality = parse_header_line.region.group(1), mun_gr.group(1)
+        region, municipality = old_header_state.group(1), mun_gr.group(1)
         region_name = MunicipalityIdentifier(fix_names(region.strip()), fix_names(municipality.strip()))
 
-      parse_header_line.region = None
+      old_header_state = None
 
-  return region_name
+  return (region_name, old_header_state)
 
 
 def parse_lines(data_tuple: DataTuple) -> DataTuple:
   municipality_ids = {}
   settlements_info = {}
+  old_header_state = None
 
   for line_num, line in enumerate(data_tuple.data):
-    municipality_id = parse_header_line(line, data_tuple.header_type)
+    municipality_id, old_header_state = parse_header_line(line, data_tuple.header_type, old_header_state)
     if municipality_id:
       municipality_ids[line_num] = municipality_id
       continue
@@ -505,22 +511,27 @@ def full_info_list_to_data_frame(data_tuple: DataTuple) -> DataTuple:
 """## Data Processing Pipeline"""
 
 
+def process_data_tuple(input_data: Tuple[Callable, DataTuple]) -> DataTuple:
+  parsing_pipeline, data_tuple = input_data
+
+  if data_tuple.table_type == TableTypeEnum.Quarterly:
+    date_group = RegexPatternWrapper().date_group
+  else:
+    date_group = RegexPatternWrapper().year_group
+
+  date_string = regex.search(date_group, data_tuple.data).group(1).replace('-', '_')
+  data_frame = parsing_pipeline(data_tuple).data
+  data_frame = data_frame.rename(columns={'permanent_residents': f'permanent_{date_string}',
+                                          'current_residents': f'current_{date_string}'})
+  # print(date_string)
+  return DataTuple(data_frame, data_tuple.header_type, data_tuple.table_type)
+
+
 def process_data(data_source: List[DataTuple], config: Configuration) -> List[DataTuple]:
-  data_frame_list = []
   parsing_pipeline = config['table_parsing']
+  wrapped_data_source = ((parsing_pipeline, dt) for dt in data_source)
 
-  for data_tuple in data_source:
-    if data_tuple.table_type == TableTypeEnum.Quarterly:
-      date_group = RegexPatternWrapper().date_group
-    else:
-      date_group = RegexPatternWrapper().year_group
-
-    date_string = regex.search(date_group, data_tuple.data).group(1).replace('-', '_')
-    data_frame = parsing_pipeline(data_tuple).data
-    data_frame = data_frame.rename(columns={'permanent_residents': f'permanent_{date_string}',
-                                            'current_residents': f'current_{date_string}'})
-    # print(date_string)
-    data_frame_list.append(DataTuple(data_frame, data_tuple.header_type, data_tuple.table_type))
+  data_frame_list = Parallel(n_jobs=-1, backend='threading')(map(delayed(process_data_tuple), wrapped_data_source))
 
   PickleWrapper().pickle_data(data_frame_list, 'data_frames_list')
 
@@ -551,18 +562,56 @@ def make_setllements_data_tuple_list(data_frame_list: List[DataTuple]) -> Tuple[
   return sdt_list
 
 
-def try_disambiguation(sdt: SettlementDataTuple, disambiguation_pipeline: Pipeline) -> SettlementDataTuple:
-  for sleep_time in range(0, 31, 10):
+def try_disambiguation(input_data: Tuple[Callable, SettlementDataTuple]) -> Tuple[SettlementDataTuple, SettlementDataTuple]:
+  disambiguation_pipeline, sdt = input_data
+  sleep_time_generator = (lambda rng: (st + (st + 1) * rng for st in range(round(rng), 60, round(5 + 10 * rng))))
+
+  for sleep_time in sleep_time_generator(random.random()):
     time.sleep(sleep_time)
     try:
       result = disambiguation_pipeline(sdt)
     except ValueError:
-      print(f'Failed disambiguating {sdt} with {sleep_time}s sleep')
+      print(f'Failed disambiguating {sdt} with {sleep_time:.3f}s sleep')
       continue
+
+    return (result, sdt)
+
+  return (None, sdt)
+
+
+def check_sdt_availability(key: str, processed_sdts: dict, reverse_dict: dict) -> bool:
+  return key in processed_sdts and processed_sdts[key] in reverse_dict
+
+
+def update_data_frame(input_data: Tuple[DataTuple, dict]) -> DataTuple:
+  dt, processed_sdts = input_data
+  df = dt.data
+  df.reset_index(inplace=True)
+  df['ekatte'] = df['settlement']
+  cols = df.columns
+
+  def updt(x):
+    result = (x[0],
+              x[1],
+              x[2],
+              x[3],
+              x[4],
+              processed_sdts.get((fix_names(x[0].strip()),
+                                  fix_names(x[1].strip()),
+                                  fix_names(x[2].split('.')[1].strip())),
+                                 None))
 
     return result
 
-  return None
+  df = pd.DataFrame([updt(x) for x in df.to_numpy()])
+
+  df.columns = cols
+  df.dropna(inplace=True)
+  df.set_index(['ekatte'], drop=True, inplace=True)
+
+  df = df.loc[~df.index.duplicated(keep='first')]
+
+  return DataTuple(df, dt.header_type, dt.table_type)
 
 
 def disambiguate_data(data_frame_list: List[DataTuple], config: Configuration) -> List[DataTuple]:
@@ -574,49 +623,25 @@ def disambiguate_data(data_frame_list: List[DataTuple], config: Configuration) -
   sdt_list = make_setllements_data_tuple_list(data_frame_list)
   failiures = set()
 
-  for i, sdt in enumerate(sdt_list):
-    if sdt[0].key in processed_sdts and processed_sdts[sdt[0].key] in reverse_dict:
-      continue
+  wrapped_data_source = ((settlement_disambiguation_pipeline, sdt[0])
+                         for sdt in sdt_list if not check_sdt_availability(sdt[0].key, processed_sdts, reverse_dict))
 
-    val = try_disambiguation(sdt[0], settlement_disambiguation_pipeline)
-    if val is None:
+  # Higher number of concurrent jobs leads to issues with failing request to NSIs website
+  results = Parallel(n_jobs=2, backend='threading')(map(delayed(try_disambiguation), wrapped_data_source))
+
+  for value, sdt in results:
+    if value is None:
       failiures.add(sdt[0])
       PickleWrapper().pickle_data(failiures, 'failiures')
     else:
-      processed_sdts[val.key] = val.data
+      processed_sdts[value.key] = value.data
       PickleWrapper().pickle_data(processed_sdts, 'triple_to_ekatte')
 
-      reverse_dict[val.data] = sdt[1]
+      reverse_dict[value.data] = sdt[1]
       PickleWrapper().pickle_data(reverse_dict, 'ekatte_to_triple')
 
-  disambiguated_data = []
-  for dt in data_frame_list:
-    df = dt.data
-    df.reset_index(inplace=True)
-    df['ekatte'] = df['settlement']
-    cols = df.columns
-
-    def updt(x):
-      result = (x[0],
-                x[1],
-                x[2],
-                x[3],
-                x[4],
-                processed_sdts.get((fix_names(x[0].strip()),
-                                    fix_names(x[1].strip()),
-                                    fix_names(x[2].split('.')[1].strip())),
-                                   None))
-
-      return result
-
-    df = pd.DataFrame([updt(x) for x in df.to_numpy()])
-
-    df.columns = cols
-    df.dropna(inplace=True)
-    df.set_index(['ekatte'], drop=True, inplace=True)
-
-    df = df.loc[~df.index.duplicated(keep='first')]
-    disambiguated_data.append(DataTuple(df, dt.header_type, dt.table_type))
+  wrapped_data_tuple_source = ((dt, processed_sdts) for dt in data_frame_list)
+  disambiguated_data = Parallel(n_jobs=-1, backend='threading')(map(delayed(update_data_frame), wrapped_data_tuple_source))
 
   PickleWrapper().pickle_data(disambiguated_data, 'data_frames_list_disambiguated')
 
