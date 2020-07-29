@@ -1,3 +1,4 @@
+![Run linter](https://github.com/rumen-cholakov/GRAO-tables-processing/workflows/Run%20linter/badge.svg?event=push)
 # GRAO-tables-processing
 
 A repository containing scripts for processing tables with information for the population of settements in Bulgaria published by GRAO
