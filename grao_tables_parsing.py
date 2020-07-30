@@ -17,7 +17,7 @@ import enum
 import json
 import os
 
-from typing import TypeVar, Callable, Sequence, List, Optional, Tuple
+from typing import TypeVar, Callable, Sequence, List, Optional, Tuple, Generator
 from collections import namedtuple, defaultdict
 from functools import reduce
 from itertools import chain
@@ -174,12 +174,16 @@ class Configuration(object):
 """## Helper Functions"""
 
 
-def static_vars_function(**kwargs):
-  def decorate(func):
-      for k in kwargs:
-          setattr(func, k, kwargs[k])
-      return func
-  return decorate
+def execute_in_parallel(
+  function: Callable[[T], U],
+  data_source: Generator[T, None, None],
+  num_jobs: int = -1
+) -> U:
+  result = []
+
+  result = Parallel(n_jobs=num_jobs)(map(delayed(function), data_source))
+
+  return result
 
 
 def fetch_raw_data(url: str, encoding: str = 'windows-1251'):
@@ -531,7 +535,7 @@ def process_data(data_source: List[DataTuple], config: Configuration) -> List[Da
   parsing_pipeline = config['table_parsing']
   wrapped_data_source = ((parsing_pipeline, dt) for dt in data_source)
 
-  data_frame_list = Parallel(n_jobs=-1, backend='threading')(map(delayed(process_data_tuple), wrapped_data_source))
+  data_frame_list = execute_in_parallel(process_data_tuple, wrapped_data_source)
 
   PickleWrapper().pickle_data(data_frame_list, 'data_frames_list')
 
@@ -627,7 +631,7 @@ def disambiguate_data(data_frame_list: List[DataTuple], config: Configuration) -
                          for sdt in sdt_list if not check_sdt_availability(sdt[0].key, processed_sdts, reverse_dict))
 
   # Higher number of concurrent jobs leads to issues with failing request to NSIs website
-  results = Parallel(n_jobs=2, backend='threading')(map(delayed(try_disambiguation), wrapped_data_source))
+  results = execute_in_parallel(try_disambiguation, wrapped_data_source, 2)
 
   for value, sdt in results:
     if value is None:
@@ -641,7 +645,7 @@ def disambiguate_data(data_frame_list: List[DataTuple], config: Configuration) -
       PickleWrapper().pickle_data(reverse_dict, 'ekatte_to_triple')
 
   wrapped_data_tuple_source = ((dt, processed_sdts) for dt in data_frame_list)
-  disambiguated_data = Parallel(n_jobs=-1, backend='threading')(map(delayed(update_data_frame), wrapped_data_tuple_source))
+  disambiguated_data = execute_in_parallel(update_data_frame, wrapped_data_tuple_source)
 
   PickleWrapper().pickle_data(disambiguated_data, 'data_frames_list_disambiguated')
 
@@ -876,16 +880,22 @@ def find_date_sufix(url: str) -> str:
 
     return date_sufix
 
-
-def find_latest_processed_file_info(storage_directory: str, url_list) -> (datetime.datetime, str, str):
-  processed_files = []
-
+def single_processed_file_info(input_data: Tuple[str,str, List[str]]) -> (datetime.datetime, str, str):
+  file, storage_directory, url_list = input_data
   file_prefix = file_prefix_for_directory(storage_directory)
 
-  for file in os.listdir(storage_directory):
-    url = find_ref_url(file, file_prefix, url_list)
-    date = date_from_url(url)
-    processed_files.append((date, url, os.path.join(storage_directory, file)))
+  url = find_ref_url(file, file_prefix, url_list)
+  date = date_from_url(url)
+
+  return (date, url, os.path.join(storage_directory, file))
+
+
+def find_latest_processed_file_info(storage_directory: str, url_list: List[str]) -> (datetime.datetime, str, str):
+
+  file_prefix = file_prefix_for_directory(storage_directory)
+  wrapped_data_generator = ((file, storage_directory, url_list) for file in os.listdir(storage_directory))
+
+  processed_files = execute_in_parallel(single_processed_file_info, wrapped_data_generator)
 
   processed_files = sorted(processed_files)
   return processed_files[-1]
