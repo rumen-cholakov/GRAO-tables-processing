@@ -8,7 +8,6 @@ import numpy as np
 import argparse
 import datetime
 import requests
-import urllib
 import pickle
 import random
 import regex
@@ -17,13 +16,15 @@ import enum
 import json
 import os
 
-from typing import TypeVar, Callable, Sequence, List, Optional, Tuple, Generator
-from collections import namedtuple, defaultdict
+from typing import Any, Iterable, NamedTuple, TypeVar, Callable, Sequence, List, Optional, Tuple, Generator, Dict
+from collections import defaultdict
+from urllib.parse import quote
 from functools import reduce
 from itertools import chain
 from dataclasses import dataclass, field
 
 from bs4 import BeautifulSoup
+from requests.models import Response
 from wikidataintegrator import wdi_core, wdi_login
 from joblib import Parallel, delayed
 
@@ -40,14 +41,46 @@ class TableTypeEnum(enum.IntEnum):
   Yearly = 1
 
 
-DataTuple = namedtuple('DataTuple', 'data header_type table_type')
-SettlementDataTuple = namedtuple('SettlementDataTuple', 'key data')
-SettlementNamesData = namedtuple('SettlementNamesData', 'name first last')
-MunicipalityIdentifier = namedtuple('MunicipalityIdentifier', 'region municipality')
-SettlementInfo = namedtuple('SettlementInfo', 'name permanent_residents current_residents')
-FullSettlementInfo = namedtuple('FullSettlementInfo', 'region municipality settlement permanent_residents current_residents')
-PopulationInfo = namedtuple('PopulationInfo', 'permanent current')
-ParsedLines = namedtuple('ParsedLines', 'municipality_ids settlements_info')
+class DataTuple(NamedTuple):
+  data: Any
+  header_type: HeaderEnum
+  table_type: TableTypeEnum
+
+
+class SettlementDataTuple(NamedTuple):
+  key: Tuple[str, str, str]
+  data: Any
+
+
+class SettlementNamesForPeriod(NamedTuple):
+  name: Tuple[str, ...]
+  start: datetime.datetime
+  end: datetime.datetime
+
+
+class MunicipalityIdentifier(NamedTuple):
+  region: str
+  municipality: str
+
+
+class SettlementInfo(NamedTuple):
+  name: str
+  permanent_residents: int
+  current_residents: int
+
+
+class FullSettlementInfo(NamedTuple):
+  region: str
+  municipality: str
+  settlement: str
+  permanent_residents: int
+  current_residents: int
+
+
+class ParsedLines(NamedTuple):
+  municipality_ids: Dict[int, MunicipalityIdentifier]
+  settlements_info: Dict[int, SettlementInfo]
+
 
 T = TypeVar('T')
 U = TypeVar('U')
@@ -56,7 +89,7 @@ U = TypeVar('U')
 class Singleton(type):
     _instances = {}
 
-    def __call__(cls, *args, **kwargs):
+    def __call__(cls, *args: List[Any], **kwargs: Dict[str, Any]):
         if cls not in cls._instances:
             cls._instances[cls] = super(Singleton, cls).__call__(*args, **kwargs)
         return cls._instances[cls]
@@ -89,20 +122,28 @@ class RegexPatternWrapper(metaclass=Singleton):
     self.settlement_info_yearly = f'({type_abbr}{name})\s*{number_group * 6}'
 
 
-class PickleWrapper(metaclass=Singleton):
+class PickleWrapper():
 
-  def __init__(self, directory):
-    self.directory = directory
+  directory = ''
 
-  def pickle_data(self, data, name):
-    if not os.path.exists(self.directory):
-      os.makedirs(self.directory)
+  @staticmethod
+  def configure(directory: str):
+    PickleWrapper.directory = directory
 
-    with open(f'{self.directory}/{name}.pkl', 'wb') as f:
+  @staticmethod
+  def pickle_data(data: Any, name: str):
+    directory = PickleWrapper.directory
+
+    if not os.path.exists(directory):
+      os.makedirs(directory)
+
+    with open(f'{directory}/{name}.pkl', 'wb') as f:
       pickle.dump(data, f)
 
-  def load_data(self, name):
-    path = f'{self.directory}/{name}.pkl'
+  @staticmethod
+  def load_data(name: str) -> Optional[Any]:
+    directory = PickleWrapper.directory
+    path = f'{directory}/{name}.pkl'
 
     if not os.path.exists(path):
       return None
@@ -112,24 +153,11 @@ class PickleWrapper(metaclass=Singleton):
 
 
 class Pipeline(object):
-  def __init__(self, functions: Sequence[Callable[[T], T]]):
-    self.pipeline = (lambda value: self._pipeline(value, function_pipeline=functions))
+  def __init__(self, functions: Sequence[Callable[[T], Optional[T]]]):
+    self.functions = functions
 
   def __call__(self, value: T) -> T:
-    return self.pipeline(value)
-
-  def _pipeline(
-    self,
-    value: T,
-    function_pipeline: Sequence[Callable[[T], T]],
-  ) -> T:
-    '''A generic Unix-like pipeline
-
-    :param value: the value you want to pass through a pipeline
-    :param function_pipeline: an ordered list of functions that
-        comprise your pipeline
-    '''
-    return reduce(lambda v, f: f(v), function_pipeline, value)
+    return reduce(apply, self.functions, value)
 
 
 @dataclass
@@ -142,31 +170,31 @@ class Configuration(object):
   pickled_data_path: str
   credentials_path: str
   data: List[str] = field(init=False)
-  _extra_params: dict = field(default_factory=dict)
+  _extra_params: Dict[Any, Any] = field(default_factory=dict)
 
   def __post_init__(self):
     with open(self.data_configuration_path) as file:
       self.data = json.load(file)
 
-  def __getitem__(self, name):
-    return self._extra_params.get(name, None)
+  def __getitem__(self, key: Any):
+    return self._extra_params.get(key, None)
 
-  def __setitem__(self, name, value):
-    self._extra_params[name] = value
+  def __setitem__(self, key: Any, value: Any):
+    self._extra_params[key] = value
 
   def process_data_configuration(self) -> List[DataTuple]:
     output = []
     for entry in self.data:
-      output.append(self._data_tuple_from_entry(entry))
+      output.append(Configuration._data_tuple_from_entry(entry))
 
     return output
 
-  def _data_tuple_from_entry(self, entry: str) -> DataTuple:
-    if regex.search(RegexPatternWrapper().date_group, entry) is not None:
+  @staticmethod
+  def _data_tuple_from_entry(entry: str) -> Optional[DataTuple]:
+    if regex.search(RegexPatternWrapper().date_group, entry):
       return DataTuple(entry, HeaderEnum.New, TableTypeEnum.Quarterly)
 
-    date = regex.search(RegexPatternWrapper().year_group, entry)
-    if date is not None:
+    if date := regex.search(RegexPatternWrapper().year_group, entry):
       header_type = HeaderEnum(int(date.group(1)) > 2005)
       return DataTuple(entry, header_type, TableTypeEnum.Yearly)
 
@@ -174,25 +202,30 @@ class Configuration(object):
 """## Helper Functions"""
 
 
+def apply(val: T, func: Callable[[T], U]) -> U:
+  return func(val)
+
+
 def execute_in_parallel(
   function: Callable[[T], U],
   data_source: Generator[T, None, None],
   num_jobs: int = -1
-) -> U:
-  result = []
+) -> Optional[List[U]]:
+  result: Optional[List[U]] = []
 
-  result = Parallel(n_jobs=num_jobs)(map(delayed(function), data_source))
+  with Parallel(n_jobs=num_jobs) as parallel:
+    result = parallel(map(delayed(function), data_source))
 
   return result
 
 
-def fetch_raw_data(url: str, encoding: str = 'windows-1251'):
+def fetch_raw_data(url: str, encoding: str = 'windows-1251') -> Response:
   headers = requests.utils.default_headers()
   headers.update({
       'User-Agent': 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:52.0) Gecko/20100101 Firefox/52.0'
   })
 
-  req = requests.get(url, headers)
+  req: Response = requests.get(url, headers)
   req.encoding = encoding
 
   return req
@@ -279,7 +312,7 @@ def fetch_raw_settlement_data(settlement: SettlementDataTuple) -> SettlementData
   if name.find('-') != -1:
     name = name.split('-')[1]
 
-  encoded_name = urllib.parse.quote(name.encode('windows-1251'))
+  encoded_name = quote(name.encode('windows-1251'))
   data = fetch_raw_data(f'https://www.nsi.bg/nrnm/index.php?ezik=bul&f=6&name={encoded_name}&code=&kind=-1')
   req = data
 
@@ -294,29 +327,30 @@ def parse_raw_settlement_data(settlement: SettlementDataTuple) -> SettlementData
   soup = BeautifulSoup(req.text, 'lxml')
   table = soup.find_all('table')[-4]
 
-  data = defaultdict(list)
-  last_key = ''
+  data: Dict[str, List[SettlementNamesForPeriod]] = defaultdict(list)
+  last_key: str = ''
 
   oldest_record_date = datetime.datetime.strptime('31.12.1899', '%d.%m.%Y')
-  for row in table.find_all('tr')[2:]:
+  rows = table.find_all('tr')
+  for row in rows[2:]:
     cells = row.find_all('td')
     num_cells = len(cells)
 
     if num_cells == 2:
       last_key = cells[0].text
     elif num_cells == 3:
-      dates = cells[2].text.split('-')
+      dates: str = cells[2].text.split('-')
       start = datetime.datetime.strptime(dates[0].strip(), '%d.%m.%Y')
       end = datetime.datetime.max
 
       if len(dates[1].strip()) > 0:
         end = datetime.datetime.strptime(dates[1].strip(), '%d.%m.%Y')
 
-      name_tuple = tuple(map(lambda s: s.strip(), cells[1].text.split(',')[::-1]))
+      name_tuple: Tuple[str, ...] = tuple(map(lambda s: s.strip(), cells[1].text.split(',')[::-1]))
 
       if end > oldest_record_date and len(name_tuple) > 2:
         data[last_key].append(
-            SettlementNamesData(
+            SettlementNamesForPeriod(
                 name_tuple,
                 start,
                 end,
@@ -326,7 +360,7 @@ def parse_raw_settlement_data(settlement: SettlementDataTuple) -> SettlementData
   return SettlementDataTuple(settlement.key, data)
 
 
-def mach_key_with_code(settlement: SettlementDataTuple) -> SettlementDataTuple:
+def mach_key_with_code(settlement: SettlementDataTuple) -> Optional[SettlementDataTuple]:
   ker_region = settlement.key[0].lower()
   ker_municipality = settlement.key[1].lower()
   ker_settlement = settlement.key[2].lower()
@@ -375,7 +409,7 @@ def mach_key_with_code(settlement: SettlementDataTuple) -> SettlementDataTuple:
               region_match,
               municipality_and_settlement_match
          ]):
-        result_list.append((name_data.last, SettlementDataTuple(settlement.key, code)))
+        result_list.append((name_data.end, SettlementDataTuple(settlement.key, code)))
 
   # if there are multiple matching names take the most recent one
   sorted(result_list)
@@ -397,8 +431,9 @@ def fetch_raw_table(data_tuple: DataTuple) -> DataTuple:
 
 def raw_table_to_lines(data_tuple: DataTuple) -> DataTuple:
   req = data_tuple.data
-  soup = BeautifulSoup(req.text, 'lxml').prettify()
-  split = soup.split('\r\n')
+  soup_str: str = str(BeautifulSoup(req.text, 'lxml').prettify(encoding=None))
+  separator = str('\r\n')
+  split = soup_str.split(sep=separator)
 
   return DataTuple(split, data_tuple.header_type, data_tuple.table_type)
 
@@ -415,12 +450,11 @@ def parse_data_line(line: str, table_type: TableTypeEnum) -> Optional[Settlement
     settlement_info_re = RegexPatternWrapper().settlement_info_yearly
     current_population_position = 6
 
-  settlement_info = regex.search(settlement_info_re, line)
-
-  if settlement_info:
-    name, permanent, current = settlement_info.group(1,
-                                                     permanent_population_position,
-                                                     current_population_position)
+  settlement_info = None
+  if settlement_info_group := regex.search(settlement_info_re, line):
+    name: str = settlement_info_group.group(1)
+    permanent: int = int(settlement_info_group.group(permanent_population_position))
+    current: int = int(settlement_info_group.group(current_population_position))
 
     name_parts = name.split('.')
     name = '. '.join([name_parts[0], fix_names(name_parts[1])])
@@ -436,23 +470,20 @@ def parse_header_line(
 ) -> Tuple[Optional[MunicipalityIdentifier], Optional[T]]:
   region_name = None
 
-  if header_type == HeaderEnum.New:
-    region_gr = regex.search(RegexPatternWrapper().region_name_new, line)
-
-    if region_gr:
-      region, municipality = region_gr.group(1, 2)
-      region_name = MunicipalityIdentifier(region.strip(), municipality.strip())
+  if header_type == HeaderEnum.New and (region_gr := regex.search(RegexPatternWrapper().region_name_new, line)):
+    region: str = region_gr.group(1)
+    municipality: str = region_gr.group(2)
+    region_name = MunicipalityIdentifier(region.strip(), municipality.strip())
 
   elif header_type == HeaderEnum.Old:
     if old_header_state is None:
       old_header_state = regex.search(RegexPatternWrapper().old_reg, line)
       region_name = None
+    elif mun_gr := regex.search(RegexPatternWrapper().old_mun, line):
+      region: str = old_header_state.group(1)
+      municipality: str = mun_gr.group(1)
+      region_name = MunicipalityIdentifier(fix_names(region.strip()), fix_names(municipality.strip()))
     else:
-      mun_gr = regex.search(RegexPatternWrapper().old_mun, line)
-      if mun_gr:
-        region, municipality = old_header_state.group(1), mun_gr.group(1)
-        region_name = MunicipalityIdentifier(fix_names(region.strip()), fix_names(municipality.strip()))
-
       old_header_state = None
 
   return (region_name, old_header_state)
@@ -515,7 +546,7 @@ def full_info_list_to_data_frame(data_tuple: DataTuple) -> DataTuple:
 """## Data Processing Pipeline"""
 
 
-def process_data_tuple(input_data: Tuple[Callable, DataTuple]) -> DataTuple:
+def process_data_tuple(input_data: Tuple[Callable[[DataTuple], DataTuple], DataTuple]) -> DataTuple:
   parsing_pipeline, data_tuple = input_data
 
   if data_tuple.table_type == TableTypeEnum.Quarterly:
@@ -523,11 +554,11 @@ def process_data_tuple(input_data: Tuple[Callable, DataTuple]) -> DataTuple:
   else:
     date_group = RegexPatternWrapper().year_group
 
-  date_string = regex.search(date_group, data_tuple.data).group(1).replace('-', '_')
+  date_string: str = regex.search(date_group, data_tuple.data).group(1).replace('-', '_')
   data_frame = parsing_pipeline(data_tuple).data
   data_frame = data_frame.rename(columns={'permanent_residents': f'permanent_{date_string}',
                                           'current_residents': f'current_{date_string}'})
-  # print(date_string)
+
   return DataTuple(data_frame, data_tuple.header_type, data_tuple.table_type)
 
 
@@ -537,24 +568,27 @@ def process_data(data_source: List[DataTuple], config: Configuration) -> List[Da
 
   data_frame_list = execute_in_parallel(process_data_tuple, wrapped_data_source)
 
-  PickleWrapper().pickle_data(data_frame_list, 'data_frames_list')
+  if data_frame_list is None:
+    raise Exception('Failed parsing tables!')
+
+  PickleWrapper.pickle_data(data_frame_list, 'data_frames_list')
 
   return data_frame_list
 
 
-def load_ekatte_dicts() -> Tuple[dict, dict]:
-  processed_sdts = PickleWrapper().load_data('triple_to_ekatte')
+def load_ekatte_dicts() -> Tuple[Dict[Any, Any], Dict[Any, Any]]:
+  processed_sdts = PickleWrapper.load_data('triple_to_ekatte')
   if (processed_sdts is None) or (not isinstance(processed_sdts, dict)):
     processed_sdts = {}
 
-  reverse_dict = PickleWrapper().load_data('ekatte_to_triple')
+  reverse_dict = PickleWrapper.load_data('ekatte_to_triple')
   if (reverse_dict is None) or (not isinstance(reverse_dict, dict)):
     reverse_dict = {}
 
   return processed_sdts, reverse_dict
 
 
-def make_setllements_data_tuple_list(data_frame_list: List[DataTuple]) -> Tuple[SettlementDataTuple, str]:
+def make_setllements_data_tuple_list(data_frame_list: List[DataTuple]) -> List[Tuple[SettlementDataTuple, str]]:
   sdt_list = list(map(lambda tup: (SettlementDataTuple(tup[0], tup[0][2]), tup[1]),
                       map(lambda name: ((fix_names(name[0].strip()),
                                          fix_names(name[1].strip()),
@@ -566,9 +600,14 @@ def make_setllements_data_tuple_list(data_frame_list: List[DataTuple]) -> Tuple[
   return sdt_list
 
 
-def try_disambiguation(input_data: Tuple[Callable, SettlementDataTuple]) -> Tuple[SettlementDataTuple, SettlementDataTuple]:
+def sleep_time_generator(random_seed: float) -> Generator[float, None, None]:
+  return (st + (st + 1) * random_seed for st in range(round(random_seed), 60, round(5 + 10 * random_seed)))
+
+
+def try_disambiguation(
+  input_data: Tuple[Callable[[SettlementDataTuple], SettlementDataTuple], SettlementDataTuple]
+) -> Tuple[Optional[SettlementDataTuple], SettlementDataTuple]:
   disambiguation_pipeline, sdt = input_data
-  sleep_time_generator = (lambda rng: (st + (st + 1) * rng for st in range(round(rng), 60, round(5 + 10 * rng))))
 
   for sleep_time in sleep_time_generator(random.random()):
     time.sleep(sleep_time)
@@ -583,18 +622,18 @@ def try_disambiguation(input_data: Tuple[Callable, SettlementDataTuple]) -> Tupl
   return (None, sdt)
 
 
-def check_sdt_availability(key: str, processed_sdts: dict, reverse_dict: dict) -> bool:
-  return key in processed_sdts and processed_sdts[key] in reverse_dict
+def check_sdt_availability(key: SettlementDataTuple, processed_sdts: Dict[Any, Any], reverse_dict: Dict[Any, Any]) -> bool:
+  return key.key in processed_sdts and processed_sdts[key.key] in reverse_dict
 
 
-def update_data_frame(input_data: Tuple[DataTuple, dict]) -> DataTuple:
+def update_data_frame(input_data: Tuple[DataTuple, Dict[Any, Any]]) -> DataTuple:
   dt, processed_sdts = input_data
   df = dt.data
   df.reset_index(inplace=True)
   df['ekatte'] = df['settlement']
   cols = df.columns
 
-  def updt(x):
+  def updt(x: Tuple[str, str, str, int, int, str]) -> Tuple[str, str, str, int, int, Optional[str]]:
     result = (x[0],
               x[1],
               x[2],
@@ -628,77 +667,77 @@ def disambiguate_data(data_frame_list: List[DataTuple], config: Configuration) -
   failiures = set()
 
   wrapped_data_source = ((settlement_disambiguation_pipeline, sdt[0])
-                         for sdt in sdt_list if not check_sdt_availability(sdt[0].key, processed_sdts, reverse_dict))
+                         for sdt in sdt_list if not check_sdt_availability(sdt[0], processed_sdts, reverse_dict))
 
   # Higher number of concurrent jobs leads to issues with failing request to NSIs website
   results = execute_in_parallel(try_disambiguation, wrapped_data_source, 2)
 
+  if results is None:
+    raise Exception('Settlement disambiguation failed!')
+
   for value, sdt in results:
     if value is None:
       failiures.add(sdt[0])
-      PickleWrapper().pickle_data(failiures, 'failiures')
+      PickleWrapper.pickle_data(failiures, 'failiures')
     else:
       processed_sdts[value.key] = value.data
-      PickleWrapper().pickle_data(processed_sdts, 'triple_to_ekatte')
+      PickleWrapper.pickle_data(processed_sdts, 'triple_to_ekatte')
 
       reverse_dict[value.data] = sdt[1]
-      PickleWrapper().pickle_data(reverse_dict, 'ekatte_to_triple')
+      PickleWrapper.pickle_data(reverse_dict, 'ekatte_to_triple')
 
   wrapped_data_tuple_source = ((dt, processed_sdts) for dt in data_frame_list)
   disambiguated_data = execute_in_parallel(update_data_frame, wrapped_data_tuple_source)
 
-  PickleWrapper().pickle_data(disambiguated_data, 'data_frames_list_disambiguated')
+  if disambiguated_data is None:
+    raise Exception('Updating DataFrames failed!')
+
+  PickleWrapper.pickle_data(disambiguated_data, 'data_frames_list_disambiguated')
 
   return disambiguated_data
 
 
 def combine_data(processed_data: List[DataTuple], config: Configuration) -> List[DataTuple]:
-  combined = None
+  combined: Optional[pd.DataFrame] = None
   names = ['region', 'municipality', 'settlement']
 
   for dt in processed_data:
     if combined is None:
       combined = dt.data.drop(labels=names, axis=1)
     else:
-      df = dt.data.drop(labels=names, axis=1)
+      df: pd.DataFrame = dt.data.drop(labels=names, axis=1)
       combined = combined.merge(df,
                                 how='outer',
                                 copy=False,
                                 left_index=True,
                                 right_index=True)
 
+  if combined is None:
+    raise Exception('Failed to combine DataFarmes')
+
   combined.fillna(value=0, inplace=True)
   for column in combined.columns.to_list():
     combined[column] = combined[column].astype(int)
 
-  PickleWrapper().pickle_data(combined, 'combined_tables')
+  PickleWrapper.pickle_data(combined, 'combined_tables')
 
-  return [DataTuple(combined, 0, 0)]
+  return [DataTuple(combined, HeaderEnum(0), TableTypeEnum(0))]
 
 
 def store_data_list(processed_data: List[DataTuple], config: Configuration) -> List[DataTuple]:
   for dt in processed_data:
-    df = dt.data
+    df: pd.DataFrame = dt.data
 
     name = f'grao_data_{"_".join(df.columns[-1].split("_")[1:])}'
-    directory = config.processed_tables_path
-    if not os.path.exists(directory):
-      os.makedirs(directory)
-    # print(f'{directory}/{name}.csv')
-    df.to_csv(f'{directory}/{name}.csv')
+    df.to_csv(f'{config.processed_tables_path}/{name}.csv')
 
   return processed_data
 
 
 def store_combined_data(processed_data: List[DataTuple], config: Configuration) -> List[DataTuple]:
-  combined_data = processed_data[0].data
+  combined_data: pd.DataFrame = processed_data[0].data
 
-  directory = config.combined_tables_path
-  if not os.path.exists(directory):
-    os.makedirs(directory)
-
-  # print(f'{directory}/grao_data_combined.csv')
-  combined_data.to_csv(f'{directory}/grao_data_combined.csv')
+  combined_data.to_csv(f'{config.combined_tables_path}/grao_data_combined.csv')
 
   return processed_data
 
@@ -706,7 +745,7 @@ def store_combined_data(processed_data: List[DataTuple], config: Configuration) 
 """## Visualizations"""
 
 
-def autolabel(ax, rects):
+def autolabel(ax, rects: Iterable[Any]):
     """Attach a text label above each bar in *rects*, displaying its height."""
     for rect in rects:
         height = rect.get_height()
@@ -717,9 +756,13 @@ def autolabel(ax, rects):
                     ha='center', va='bottom')
 
 
-def load_processed_data() -> (dict, dict):
-  ekatte_to_triple = PickleWrapper().load_data('ekatte_to_triple')
-  combined = PickleWrapper().load_data('combined_tables')
+def load_processed_data() -> Tuple[Dict[Any, Any], Dict[Any, Any]]:
+  ekatte_to_triple = PickleWrapper.load_data('ekatte_to_triple')
+  combined = PickleWrapper.load_data('combined_tables')
+
+  if ekatte_to_triple is None or combined is None:
+    raise Exception('There was an issue loading the data!')
+
   combined_dict = combined.to_dict(orient='index')
 
   return ekatte_to_triple, combined_dict
@@ -839,7 +882,7 @@ def create_visualizations(config: Configuration):
 
 def find_ref_url(path_to_file: str, file_prefix: str, url_list: List[str]) -> str:
   processing_pipline = Pipeline((
-    os.path.basename,
+    (lambda path: os.path.basename(path)),
     (lambda name: name.split('.')[0]),
     (lambda name: name.replace(file_prefix, '')),
     (lambda name: name.replace('_', '-')),
@@ -851,16 +894,13 @@ def find_ref_url(path_to_file: str, file_prefix: str, url_list: List[str]) -> st
 
 
 def date_from_url(url: str) -> datetime.datetime:
-  date_str = ''
+  date_str: str = ''
 
-  date_group = regex.search(RegexPatternWrapper().full_date_group, url)
-  if date_group is not None:
+  if date_group := regex.search(RegexPatternWrapper().full_date_group, url):
     date_str = date_group.group(1)
-  else:
-    date_group = regex.search(RegexPatternWrapper().year_group, url)
-    if date_group is not None:
-      date_str = date_group.group(1)
-      date_str = f'31-12-{date_str}'
+  elif date_group := regex.search(RegexPatternWrapper().year_group, url):
+    date_str = date_group.group(1)
+    date_str = f'31-12-{date_str}'
 
   date = datetime.datetime.strptime(date_str, '%d-%m-%Y')
 
@@ -880,7 +920,8 @@ def find_date_sufix(url: str) -> str:
 
     return date_sufix
 
-def single_processed_file_info(input_data: Tuple[str,str, List[str]]) -> (datetime.datetime, str, str):
+
+def single_processed_file_info(input_data: Tuple[str, str, List[str]]) -> Tuple[datetime.datetime, str, str]:
   file, storage_directory, url_list = input_data
   file_prefix = file_prefix_for_directory(storage_directory)
 
@@ -890,24 +931,32 @@ def single_processed_file_info(input_data: Tuple[str,str, List[str]]) -> (dateti
   return (date, url, os.path.join(storage_directory, file))
 
 
-def find_latest_processed_file_info(storage_directory: str, url_list: List[str]) -> (datetime.datetime, str, str):
-
-  file_prefix = file_prefix_for_directory(storage_directory)
+def find_latest_processed_file_info(storage_directory: str, url_list: List[str]) -> Tuple[datetime.datetime, str, str]:
   wrapped_data_generator = ((file, storage_directory, url_list) for file in os.listdir(storage_directory))
 
   processed_files = execute_in_parallel(single_processed_file_info, wrapped_data_generator)
+
+  if processed_files is None:
+    raise Exception(f'Couldn\'t processed files in {storage_directory}')
 
   processed_files = sorted(processed_files)
   return processed_files[-1]
 
 
-def dict_from_csv(csv_path: str, index_name: str) -> dict:
-  return pd.read_csv(csv_path, dtype=np.str).set_index(index_name).to_dict(orient='index')
+def dict_from_csv(csv_path: str, index_name: str) -> Dict[Any, Any]:
+  loaded_dict = pd.DataFrame(pd.read_csv(csv_path, dtype=np.str)).set_index(index_name).to_dict(orient='index', into=dict)
+
+  if not isinstance(loaded_dict, dict):
+    result: Dict[Any, Any] = {}
+  else:
+    result = loaded_dict
+
+  return result
 
 
 def update_matched_data(config: Configuration):
   matched_tables_path = config.matched_tables_path
-  matched_data_time, matched_data_url, matched_data_path = find_latest_processed_file_info(
+  matched_data_time, _, matched_data_path = find_latest_processed_file_info(
     matched_tables_path,
     config.data
   )
@@ -931,6 +980,10 @@ def update_matched_data(config: Configuration):
     new_matched_data[key]['current_population'] = grao_data_dict[key][f'current_{date_sufix}']
 
   new_matched_df = pd.DataFrame.from_dict(new_matched_data, orient='index', dtype=np.str).reset_index()
+
+  if new_matched_df is None:
+    raise Exception('Failed to cerate updated DataFrame')
+
   new_matched_df.rename(columns={'index': 'ekatte'}, inplace=True)
   new_matched_df.to_csv(f'{matched_tables_path}/{file_prefix_for_directory(matched_tables_path)}{date_sufix}.csv', index=False)
 
@@ -938,7 +991,7 @@ def update_matched_data(config: Configuration):
 """## Update bot"""
 
 
-def create_qualifiers(date: datetime.datetime) -> List:
+def create_qualifiers(date: datetime.datetime) -> List[Any]:
   ref_time_str = f'+{date.isoformat()}Z'
   point_in_time = wdi_core.WDTime(time=ref_time_str, prop_nr='P585', is_qualifier=True)
   determination_method = wdi_core.WDItemID(value='Q90878157', prop_nr="P459", is_qualifier=True)
@@ -947,13 +1000,13 @@ def create_qualifiers(date: datetime.datetime) -> List:
 
 
 def login_with_credentials(credentials_path: str) -> wdi_login.WDLogin:
-  credentials: pd.DataFrame = pd.read_csv(credentials_path)
+  credentials = pd.DataFrame(pd.read_csv(credentials_path))
   username, password = tuple(credentials)
 
   return wdi_login.WDLogin(username, password)
 
 
-def update_item(login: wdi_login.WDLogin, settlement_qid: str, data: wdi_core.WDQuantity):
+def update_item(login: wdi_login.WDLogin, settlement_qid: str, data: List[wdi_core.WDQuantity]):
   item = wdi_core.WDItemEngine(wd_item_id=settlement_qid, data=data)
   item.write(login, False)
   time.sleep(15)
@@ -971,10 +1024,10 @@ def update_all_settlements(config: Configuration):
 
   error_logs = []
 
-  data = pd.read_csv(path)
+  data = pd.DataFrame(pd.read_csv(path))
   for _, row in data.iterrows():
-    settlement_qid = row['settlement']
-    population = row['permanent_population']
+    settlement_qid: str = row['settlement']
+    population: str = row['permanent_population']
     prop = wdi_core.WDQuantity(
       prop_nr='P1082',
       value=population,
@@ -1010,11 +1063,11 @@ class ValidationItem:
     return self.check(self.parameter)
 
 
-def input_validation_callback(message: str, return_vale: T = None, action: Callable[[], T] = None) -> T:
+def input_validation_callback(message: str, return_vale: T = None, action: Optional[Callable[[], T]] = None) -> T:
   print(message)
   result = None
 
-  if action is not None:
+  if action:
     result = action()
 
   if return_vale is not None:
@@ -1027,7 +1080,7 @@ def make_dir(path: str) -> bool:
   result = input_validation_callback(
     f'Creating directory at path: {path}',
     return_vale=True,
-    action=(lambda: os.makedirs(path))
+    action=(lambda: os.makedirs(path) or True)
   )
 
   return result
@@ -1128,7 +1181,7 @@ def main():
   if not validation_result:
     exit(1)
 
-  PickleWrapper(args.pickled_data_path)
+  PickleWrapper.configure(args.pickled_data_path)
 
   configuration = Configuration(
     args.data_configuration_path,
