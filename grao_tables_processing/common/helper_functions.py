@@ -1,5 +1,5 @@
 from typing import Any, Callable, Optional, List, Generator
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed  # type: ignore
 from requests import get as get_request
 from requests.utils import default_headers
 

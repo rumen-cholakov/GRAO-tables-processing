@@ -1,8 +1,8 @@
-import pandas as pd
+import pandas as pd  # type: ignore
 import random
 import time
 
-from regex import search
+from regex import search  # type: ignore
 from itertools import chain
 from typing import Tuple, Callable, List, Dict, Any, Optional, Generator
 
@@ -73,7 +73,7 @@ def sleep_time_generator(random_seed: float) -> Generator[float, None, None]:
 
 def try_disambiguation(
   input_data: Tuple[Callable[[SettlementDataTuple], SettlementDataTuple], SettlementDataTuple]
-) -> Tuple[Optional[SettlementDataTuple], SettlementDataTuple]:
+) -> Tuple[SettlementDataTuple, SettlementDataTuple]:
   disambiguation_pipeline, sdt = input_data
 
   for sleep_time in sleep_time_generator(random.random()):
@@ -86,7 +86,7 @@ def try_disambiguation(
 
     return (result, sdt)
 
-  return (None, sdt)
+  return (SettlementDataTuple(sdt.key), sdt)
 
 
 def check_sdt_availability(key: SettlementDataTuple, processed_sdts: Dict[Any, Any], reverse_dict: Dict[Any, Any]) -> bool:
@@ -124,6 +124,24 @@ def update_data_frame(input_data: Tuple[DataTuple, Dict[Any, Any]]) -> DataTuple
   return DataTuple(df, dt.header_type, dt.table_type)
 
 
+def filter_disambiguated_sdts(
+  sdt_pairs: List[Tuple[SettlementDataTuple, SettlementDataTuple]]
+) -> List[Tuple[SettlementDataTuple, SettlementDataTuple]]:
+  result = []
+  failures = set()
+
+  for new, old in sdt_pairs:
+    if new.data is None:
+      failures.add(old)
+    else:
+      result.append((new, old))
+
+  if failures:
+    PickleWrapper.pickle_data(failures, 'failures')
+
+  return result
+
+
 def disambiguate_data(data_frame_list: List[DataTuple], config: Configuration) -> List[DataTuple]:
 
   settlement_disambiguation_pipeline = config['settlement_disambiguation']
@@ -131,7 +149,6 @@ def disambiguate_data(data_frame_list: List[DataTuple], config: Configuration) -
   processed_sdts, reverse_dict = load_ekatte_dicts()
 
   sdt_list = make_settlements_data_tuple_list(data_frame_list)
-  failures = set()
 
   wrapped_data_source = ((settlement_disambiguation_pipeline, sdt[0])
                          for sdt in sdt_list if not check_sdt_availability(sdt[0], processed_sdts, reverse_dict))
@@ -142,16 +159,12 @@ def disambiguate_data(data_frame_list: List[DataTuple], config: Configuration) -
   if results is None:
     raise Exception('Settlement disambiguation failed!')
 
-  for value, sdt in results:
-    if value is None:
-      failures.add(sdt[0])
-      PickleWrapper.pickle_data(failures, 'failures')
-    else:
-      processed_sdts[value.key] = value.data
-      PickleWrapper.pickle_data(processed_sdts, 'triple_to_ekatte')
+  for value, sdt in filter_disambiguated_sdts(results):
+    processed_sdts[value.key] = value.data
+    reverse_dict[value.data] = sdt[1]
 
-      reverse_dict[value.data] = sdt[1]
-      PickleWrapper.pickle_data(reverse_dict, 'ekatte_to_triple')
+  PickleWrapper.pickle_data(processed_sdts, 'triple_to_ekatte')
+  PickleWrapper.pickle_data(reverse_dict, 'ekatte_to_triple')
 
   wrapped_data_tuple_source = ((dt, processed_sdts) for dt in data_frame_list)
   disambiguated_data = execute_in_parallel(update_data_frame, wrapped_data_tuple_source)

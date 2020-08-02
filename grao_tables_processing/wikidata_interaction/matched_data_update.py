@@ -1,7 +1,7 @@
-import pandas as pd
+import pandas as pd  # type: ignore
 
 from typing import Dict, Any
-from numpy import str as np_str
+from numpy import str as np_str  # type: ignore
 
 from grao_tables_processing.common.configuration import Configuration
 
