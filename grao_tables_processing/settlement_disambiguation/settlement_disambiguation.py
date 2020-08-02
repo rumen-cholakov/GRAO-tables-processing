@@ -1,8 +1,8 @@
 from collections import defaultdict
 from urllib.parse import quote
 from datetime import datetime
-from bs4 import BeautifulSoup
-from typing import Dict, Tuple, List, Optional
+from bs4 import BeautifulSoup  # type: ignore
+from typing import Dict, Tuple, List
 
 from grao_tables_processing.common.custom_types import SettlementDataTuple, SettlementNamesForPeriod
 from grao_tables_processing.common.helper_functions import fetch_raw_data
@@ -63,13 +63,13 @@ def parse_raw_settlement_data(settlement: SettlementDataTuple) -> SettlementData
   return SettlementDataTuple(settlement.key, data)
 
 
-def mach_key_with_code(settlement: SettlementDataTuple) -> Optional[SettlementDataTuple]:
+def mach_key_with_code(settlement: SettlementDataTuple) -> SettlementDataTuple:
   ker_region = settlement.key[0].lower()
   ker_municipality = settlement.key[1].lower()
   ker_settlement = settlement.key[2].lower()
 
   data_dict = settlement.data
-  result = None
+  result = SettlementDataTuple(settlement.key)
   result_list = []
 
   for code, names_list in data_dict.items():

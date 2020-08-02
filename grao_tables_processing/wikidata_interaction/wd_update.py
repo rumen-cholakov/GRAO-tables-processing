@@ -1,9 +1,9 @@
-import pandas as pd
+import pandas as pd  # type: ignore
 import time
 
 from typing import List, Any
 from datetime import datetime
-from wikidataintegrator import wdi_core, wdi_login
+from wikidataintegrator import wdi_core, wdi_login  # type: ignore
 
 
 from grao_tables_processing.common.configuration import Configuration

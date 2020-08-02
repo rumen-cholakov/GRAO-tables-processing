@@ -1,5 +1,5 @@
 from json import load
-from regex import search
+from regex import search  # type: ignore
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
@@ -32,7 +32,13 @@ class Configuration():
   def process_data_configuration(self) -> List[DataTuple]:
     output = []
     for entry in self.data:
-      output.append(Configuration._data_tuple_from_entry(entry))
+      dt = Configuration._data_tuple_from_entry(entry)
+
+      if dt is None:
+        print(f'Failed creating data tuple for: {entry}!!!')
+        continue
+
+      output.append(dt)
 
     return output
 
@@ -44,3 +50,5 @@ class Configuration():
     if date := search(RegexPatternWrapper().year_group, entry):
       header_type = HeaderEnum(int(date.group(1)) > 2005)
       return DataTuple(entry, header_type, TableTypeEnum.Yearly)
+
+    return None
