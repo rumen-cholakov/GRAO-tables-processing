@@ -1,7 +1,7 @@
 from os.path import basename, join
 from typing import List, Tuple
 from datetime import datetime
-from regex import search
+from regex import search   # type: ignore
 from os import listdir
 
 from grao_tables_processing.common.helper_functions import execute_in_parallel

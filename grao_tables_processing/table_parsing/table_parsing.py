@@ -1,11 +1,10 @@
-from regex import search
-from bs4 import BeautifulSoup
-from pandas import DataFrame
-from typing import Optional, Tuple
+from regex import search  # type: ignore
+from bs4 import BeautifulSoup  # type: ignore
+from pandas import DataFrame  # type: ignore
+from typing import Optional, Tuple, Any
 
 from grao_tables_processing.common.custom_types import SettlementInfo, MunicipalityIdentifier, FullSettlementInfo, ParsedLines
 from grao_tables_processing.common.custom_types import DataTuple, TableTypeEnum, HeaderEnum
-from grao_tables_processing.common.custom_types import T
 from grao_tables_processing.common.helper_functions import fix_names, fetch_raw_data
 from grao_tables_processing.common.regex_pattern_wrapper import RegexPatternWrapper
 
@@ -54,13 +53,15 @@ def parse_data_line(line: str, table_type: TableTypeEnum) -> Optional[Settlement
 def parse_header_line(
   line: str,
   header_type: HeaderEnum,
-  old_header_state: Optional[T]
-) -> Tuple[Optional[MunicipalityIdentifier], Optional[T]]:
+  old_header_state: Optional[Any]
+) -> Tuple[Optional[MunicipalityIdentifier], Optional[Any]]:
+  region: str = ''
+  municipality: str = ''
   region_name = None
 
   if header_type == HeaderEnum.New and (region_gr := search(RegexPatternWrapper().region_name_new, line)):
-    region: str = region_gr.group(1)
-    municipality: str = region_gr.group(2)
+    region = region_gr.group(1)
+    municipality = region_gr.group(2)
     region_name = MunicipalityIdentifier(region.strip(), municipality.strip())
 
   elif header_type == HeaderEnum.Old:
@@ -68,8 +69,8 @@ def parse_header_line(
       old_header_state = search(RegexPatternWrapper().old_reg, line)
       region_name = None
     elif mun_gr := search(RegexPatternWrapper().old_mun, line):
-      region: str = old_header_state.group(1)
-      municipality: str = mun_gr.group(1)
+      region = old_header_state.group(1)
+      municipality = mun_gr.group(1)
       region_name = MunicipalityIdentifier(fix_names(region.strip()), fix_names(municipality.strip()))
     else:
       old_header_state = None

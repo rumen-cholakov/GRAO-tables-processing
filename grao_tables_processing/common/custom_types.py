@@ -21,7 +21,7 @@ class DataTuple(NamedTuple):
 
 class SettlementDataTuple(NamedTuple):
   key: Tuple[str, str, str]
-  data: Any
+  data: Any = None
 
 
 class SettlementNamesForPeriod(NamedTuple):

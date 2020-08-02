@@ -1,9 +1,9 @@
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt  # type: ignore
 
 from typing import Any, Dict, Iterable, List, Tuple
 from os.path import exists
 from os import makedirs
-from numpy import arange
+from numpy import arange  # type: ignore
 
 from grao_tables_processing.common.pickle_wrapper import PickleWrapper
 from grao_tables_processing.common.configuration import Configuration

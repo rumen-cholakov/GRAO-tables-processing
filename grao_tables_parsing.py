@@ -4,7 +4,7 @@
 import argparse
 import os
 
-from typing import Callable, List, Optional
+from typing import Callable, Generic, List, Optional
 from dataclasses import dataclass
 
 from grao_tables_processing.common.custom_types import T, U
@@ -22,7 +22,7 @@ from grao_tables_processing import update_matched_data, update_all_settlements
 
 
 @dataclass
-class ValidationItem:
+class ValidationItem(Generic[T]):
   parameter: T
   action: Callable[[T], U]
   check: Callable[[T], bool]
@@ -34,7 +34,12 @@ class ValidationItem:
     return self.check(self.parameter)
 
 
-def input_validation_callback(message: str, return_vale: T = None, action: Optional[Callable[[], T]] = None) -> T:
+def input_validation_callback(
+  message: str,
+  return_vale: T = None,
+  action: Optional[Callable[[], Optional[T]]] = None
+) -> Optional[T]:
+
   print(message)
   result = None
 
@@ -51,10 +56,10 @@ def make_dir(path: str) -> bool:
   result = input_validation_callback(
     f'Creating directory at path: {path}',
     return_vale=True,
-    action=(lambda: os.makedirs(path) or True)
+    action=(lambda: os.makedirs(path))
   )
 
-  return result
+  return result or False
 
 
 def signal_for_missing_file(path: str) -> bool:
@@ -63,7 +68,7 @@ def signal_for_missing_file(path: str) -> bool:
     return_vale=False
   )
 
-  return result
+  return result or False
 
 
 def validate_input(input_list: List[ValidationItem]) -> bool:
