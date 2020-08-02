@@ -1,0 +1,6 @@
+import grao_tables_processing.wikidata_interaction.wd_update as wdu
+import grao_tables_processing.wikidata_interaction.matched_data_update as mdu
+
+
+update_all_settlements = wdu.update_all_settlements
+update_matched_data = mdu.update_matched_data
