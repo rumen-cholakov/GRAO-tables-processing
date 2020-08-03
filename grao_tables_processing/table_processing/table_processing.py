@@ -7,6 +7,7 @@ from itertools import chain
 from typing import Tuple, Callable, List, Dict, Any, Optional, Generator
 
 from grao_tables_processing.common.custom_types import DataTuple, SettlementDataTuple, HeaderEnum, TableTypeEnum
+from grao_tables_processing.common.custom_types import UnexpectedNoneError
 from grao_tables_processing.common.helper_functions import execute_in_parallel, fix_names
 from grao_tables_processing.common.regex_pattern_wrapper import RegexPatternWrapper
 from grao_tables_processing.common.pickle_wrapper import PickleWrapper
@@ -36,7 +37,7 @@ def process_data(data_source: List[DataTuple], config: Configuration) -> List[Da
   data_frame_list = execute_in_parallel(process_data_tuple, wrapped_data_source)
 
   if data_frame_list is None:
-    raise Exception('Failed parsing tables!')
+    raise UnexpectedNoneError('Failed parsing tables!')
 
   PickleWrapper.pickle_data(data_frame_list, 'data_frames_list')
 
@@ -157,7 +158,7 @@ def disambiguate_data(data_frame_list: List[DataTuple], config: Configuration) -
   results = execute_in_parallel(try_disambiguation, wrapped_data_source, 2)
 
   if results is None:
-    raise Exception('Settlement disambiguation failed!')
+    raise UnexpectedNoneError('Settlement disambiguation failed!')
 
   for value, sdt in filter_disambiguated_sdts(results):
     processed_sdts[value.key] = value.data
@@ -170,7 +171,7 @@ def disambiguate_data(data_frame_list: List[DataTuple], config: Configuration) -
   disambiguated_data = execute_in_parallel(update_data_frame, wrapped_data_tuple_source)
 
   if disambiguated_data is None:
-    raise Exception('Updating DataFrames failed!')
+    raise UnexpectedNoneError('Updating DataFrames failed!')
 
   PickleWrapper.pickle_data(disambiguated_data, 'data_frames_list_disambiguated')
 
@@ -193,7 +194,7 @@ def combine_data(processed_data: List[DataTuple], config: Configuration) -> List
                                 right_index=True)
 
   if combined is None:
-    raise Exception('Failed to combine DataFarmes')
+    raise UnexpectedNoneError('Failed to combine DataFarmes')
 
   combined.fillna(value=0, inplace=True)
   for column in combined.columns.to_list():

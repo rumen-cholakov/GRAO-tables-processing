@@ -115,7 +115,7 @@ def mach_key_with_code(settlement: SettlementDataTuple) -> SettlementDataTuple:
         result_list.append((name_data.end, SettlementDataTuple(settlement.key, code)))
 
   # if there are multiple matching names take the most recent one
-  sorted(result_list)
+  result_list = sorted(result_list)
   if len(result_list) > 0:
     result = result_list[-1][1]
 

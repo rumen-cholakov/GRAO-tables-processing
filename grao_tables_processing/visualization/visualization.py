@@ -7,6 +7,7 @@ from numpy import arange  # type: ignore
 
 from grao_tables_processing.common.pickle_wrapper import PickleWrapper
 from grao_tables_processing.common.configuration import Configuration
+from grao_tables_processing.common.custom_types import UnexpectedNoneError
 
 
 def autolabel(ax, rects: Iterable[Any]):
@@ -25,7 +26,7 @@ def load_processed_data() -> Tuple[Dict[Any, Any], Dict[Any, Any]]:
   combined = PickleWrapper.load_data('combined_tables')
 
   if ekatte_to_triple is None or combined is None:
-    raise Exception('There was an issue loading the data!')
+    raise UnexpectedNoneError('There was an issue loading the data!')
 
   combined_dict = combined.to_dict(orient='index')
 

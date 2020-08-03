@@ -56,3 +56,7 @@ class ParsedLines(NamedTuple):
 
 T = TypeVar('T')
 U = TypeVar('U')
+
+
+class UnexpectedNoneError(Exception):
+  pass
