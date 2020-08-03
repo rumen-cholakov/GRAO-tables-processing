@@ -89,8 +89,7 @@ def parse_lines(data_tuple: DataTuple) -> DataTuple:
       municipality_ids[line_num] = municipality_id
       continue
 
-    settlement_info = parse_data_line(line, data_tuple.table_type)
-    if settlement_info:
+    if settlement_info := parse_data_line(line, data_tuple.table_type):
       settlements_info[line_num] = settlement_info
 
   return DataTuple(ParsedLines(municipality_ids, settlements_info), data_tuple.header_type, data_tuple.table_type)
