@@ -34,3 +34,7 @@ jobs:
         flake8 . --count --exit-zero --ignore=E111,E114,E121,W605 --max-complexity=6 --max-line-length=127 --statistics
         # run type checking
         mypy .
+    - name: Run type checking with mypy
+      run: |
+        # run type checking
+        mypy .
