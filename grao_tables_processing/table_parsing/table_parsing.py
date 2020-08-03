@@ -1,7 +1,7 @@
 from regex import search  # type: ignore
 from bs4 import BeautifulSoup  # type: ignore
 from pandas import DataFrame  # type: ignore
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple, Match
 
 from grao_tables_processing.common.custom_types import SettlementInfo, MunicipalityIdentifier, FullSettlementInfo, ParsedLines
 from grao_tables_processing.common.custom_types import DataTuple, TableTypeEnum, HeaderEnum
@@ -53,8 +53,8 @@ def parse_data_line(line: str, table_type: TableTypeEnum) -> Optional[Settlement
 def parse_header_line(
   line: str,
   header_type: HeaderEnum,
-  old_header_state: Optional[Any]
-) -> Tuple[Optional[MunicipalityIdentifier], Optional[Any]]:
+  old_header_state: Optional[Match]
+) -> Tuple[Optional[MunicipalityIdentifier], Optional[Match]]:
   region: str = ''
   municipality: str = ''
   region_name = None

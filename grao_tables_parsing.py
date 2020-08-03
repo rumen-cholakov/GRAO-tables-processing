@@ -71,7 +71,7 @@ def signal_for_missing_file(path: str) -> bool:
   return result or False
 
 
-def validate_input(input_list: List[ValidationItem]) -> bool:
+def validate_input(input_list: List[ValidationItem[T]]) -> bool:
   results = [validation_item.execute_action() for validation_item in input_list if not validation_item.execute_check()]
 
   return all(results)
