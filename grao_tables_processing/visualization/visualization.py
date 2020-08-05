@@ -7,7 +7,7 @@ from numpy import arange  # type: ignore
 
 from grao_tables_processing.common.pickle_wrapper import PickleWrapper
 from grao_tables_processing.common.configuration import Configuration
-from grao_tables_processing.common.custom_types import UnexpectedNoneError
+from grao_tables_processing.common.helper_functions import force_unwrap_optional
 
 
 def autolabel(ax, rects: Iterable[Any]):
@@ -25,12 +25,12 @@ def load_processed_data() -> Tuple[Dict[Any, Any], Dict[Any, Any]]:
   ekatte_to_triple = PickleWrapper.load_data('ekatte_to_triple')
   combined = PickleWrapper.load_data('combined_tables')
 
-  if ekatte_to_triple is None or combined is None:
-    raise UnexpectedNoneError('There was an issue loading the data!')
+  ekatte_to_triple_unwrapped: Any = force_unwrap_optional(ekatte_to_triple, 'There was an issue loading the data!')
+  combined_unwrapped: Any = force_unwrap_optional(combined, 'There was an issue loading the data!')
 
-  combined_dict = combined.to_dict(orient='index')
+  combined_dict = combined_unwrapped.to_dict(orient='index')
 
-  return ekatte_to_triple, combined_dict
+  return ekatte_to_triple_unwrapped, combined_dict
 
 
 def path_for_settlement_graphic(directory: str, name: str, suffix: str = '') -> str:

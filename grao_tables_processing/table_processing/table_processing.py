@@ -7,8 +7,7 @@ from itertools import chain
 from typing import Tuple, Callable, List, Dict, Any, Optional, Generator
 
 from grao_tables_processing.common.custom_types import DataTuple, SettlementDataTuple, HeaderEnum, TableTypeEnum
-from grao_tables_processing.common.custom_types import UnexpectedNoneError
-from grao_tables_processing.common.helper_functions import execute_in_parallel, fix_names
+from grao_tables_processing.common.helper_functions import execute_in_parallel, fix_names, force_unwrap_optional
 from grao_tables_processing.common.regex_pattern_wrapper import RegexPatternWrapper
 from grao_tables_processing.common.pickle_wrapper import PickleWrapper
 from grao_tables_processing.common.configuration import Configuration
@@ -36,8 +35,7 @@ def process_data(data_source: List[DataTuple], config: Configuration) -> List[Da
 
   data_frame_list = execute_in_parallel(process_data_tuple, wrapped_data_source)
 
-  if data_frame_list is None:
-    raise UnexpectedNoneError('Failed parsing tables!')
+  data_frame_list = force_unwrap_optional(data_frame_list, 'Failed parsing tables!')
 
   PickleWrapper.pickle_data(data_frame_list, 'data_frames_list')
 
@@ -157,8 +155,7 @@ def disambiguate_data(data_frame_list: List[DataTuple], config: Configuration) -
   # Higher number of concurrent jobs leads to issues with failing request to NSI's website
   results = execute_in_parallel(try_disambiguation, wrapped_data_source, 2)
 
-  if results is None:
-    raise UnexpectedNoneError('Settlement disambiguation failed!')
+  results = force_unwrap_optional(results, 'Settlement disambiguation failed!')
 
   for value, sdt in filter_disambiguated_sdts(results):
     processed_sdts[value.key] = value.data
@@ -170,8 +167,7 @@ def disambiguate_data(data_frame_list: List[DataTuple], config: Configuration) -
   wrapped_data_tuple_source = ((dt, processed_sdts) for dt in data_frame_list)
   disambiguated_data = execute_in_parallel(update_data_frame, wrapped_data_tuple_source)
 
-  if disambiguated_data is None:
-    raise UnexpectedNoneError('Updating DataFrames failed!')
+  disambiguated_data = force_unwrap_optional(disambiguated_data, 'Updating DataFrames failed!')
 
   PickleWrapper.pickle_data(disambiguated_data, 'data_frames_list_disambiguated')
 
@@ -193,16 +189,15 @@ def combine_data(processed_data: List[DataTuple], config: Configuration) -> List
                                 left_index=True,
                                 right_index=True)
 
-  if combined is None:
-    raise UnexpectedNoneError('Failed to combine DataFarmes')
+  combined_unwrapped: pd.DataFrame = force_unwrap_optional(combined, 'Failed to combine DataFarmes')
 
-  combined.fillna(value=0, inplace=True)
-  for column in combined.columns.to_list():
-    combined[column] = combined[column].astype(int)
+  combined_unwrapped.fillna(value=0, inplace=True)
+  for column in combined_unwrapped.columns.to_list():
+    combined_unwrapped[column] = combined_unwrapped[column].astype(int)
 
-  PickleWrapper.pickle_data(combined, 'combined_tables')
+  PickleWrapper.pickle_data(combined_unwrapped, 'combined_tables')
 
-  return [DataTuple(combined, HeaderEnum(0), TableTypeEnum(0))]
+  return [DataTuple(combined_unwrapped, HeaderEnum(0), TableTypeEnum(0))]
 
 
 def store_data_list(processed_data: List[DataTuple], config: Configuration) -> List[DataTuple]:

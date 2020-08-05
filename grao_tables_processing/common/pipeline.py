@@ -1,7 +1,8 @@
 from typing import Generic, Optional, Iterable, Callable, Any
 from functools import reduce
 
-from grao_tables_processing.common.custom_types import T, UnexpectedNoneError
+from grao_tables_processing.common.custom_types import T
+from grao_tables_processing.common.helper_functions import force_unwrap_optional
 
 PipelineFunctionType = Callable[[T], T]
 PipelineFunctionDecorator = Callable[[PipelineFunctionType[T]], PipelineFunctionType[T]]
@@ -32,12 +33,12 @@ class Pipeline(Generic[T]):
 
   def _add_logging_decorator(self, function: PipelineFunctionType) -> PipelineFunctionType:
     def wrapper_decorator(arg: T) -> T:
-      if self.logger is None:
-        raise UnexpectedNoneError('Tried to log from pipeline without a configured Logger!')
 
-      self.logger.print('function: ', function.__name__)
-      self.logger.print('arguments: ', arg)
+      logger: Any = force_unwrap_optional(self.logger, 'Tried to log from pipeline without a configured Logger!')
+
+      logger.print('function: ', function.__name__)
+      logger.print('arguments: ', arg)
       result = function(arg)
-      self.logger.print('result: ', result)
+      logger.print('result: ', result)
       return result
     return wrapper_decorator

@@ -3,7 +3,7 @@ from joblib import Parallel, delayed  # type: ignore
 from requests import get as get_request
 from requests.utils import default_headers
 
-from grao_tables_processing.common.custom_types import T, U
+from grao_tables_processing.common.custom_types import T, U, UnexpectedNoneError
 
 
 def execute_in_parallel(
@@ -29,6 +29,15 @@ def fetch_raw_data(url: str, encoding: str = 'windows-1251') -> Any:
   req.encoding = encoding
 
   return req
+
+
+def force_unwrap_optional(optional: Optional[T], error_message: str = '') -> T:
+  if optional is None:
+    raise UnexpectedNoneError(error_message)
+
+  unwrapped: T = optional
+
+  return unwrapped
 
 
 def fix_names(name: str) -> str:

@@ -4,10 +4,9 @@ from datetime import datetime
 from regex import search   # type: ignore
 from os import listdir
 
-from grao_tables_processing.common.helper_functions import execute_in_parallel
+from grao_tables_processing.common.helper_functions import execute_in_parallel, force_unwrap_optional
 from grao_tables_processing.common.regex_pattern_wrapper import RegexPatternWrapper
 from grao_tables_processing.common.pipeline import Pipeline
-from grao_tables_processing.common.custom_types import UnexpectedNoneError
 
 
 def find_ref_url(path_to_file: str, file_prefix: str, url_list: List[str]) -> str:
@@ -65,9 +64,7 @@ def find_latest_processed_file_info(storage_directory: str, url_list: List[str])
   wrapped_data_generator = ((file, storage_directory, url_list) for file in listdir(storage_directory))
 
   processed_files = execute_in_parallel(single_processed_file_info, wrapped_data_generator)
-
-  if processed_files is None:
-    raise UnexpectedNoneError(f'Couldn\'t processed files in {storage_directory}')
+  processed_files = force_unwrap_optional(processed_files, f'Couldn\'t processed files in {storage_directory}')
 
   processed_files = sorted(processed_files)
   return processed_files[-1]

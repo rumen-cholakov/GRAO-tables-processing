@@ -4,7 +4,7 @@ from typing import Dict, Any
 from numpy import str as np_str  # type: ignore
 
 from grao_tables_processing.common.configuration import Configuration
-from grao_tables_processing.common.custom_types import UnexpectedNoneError
+from grao_tables_processing.common.helper_functions import force_unwrap_optional
 
 from grao_tables_processing.wikidata_interaction.common import find_latest_processed_file_info
 from grao_tables_processing.wikidata_interaction.common import file_prefix_for_directory
@@ -48,9 +48,7 @@ def update_matched_data(config: Configuration):
     new_matched_data[key]['current_population'] = grao_data_dict[key][f'current_{date_suffix}']
 
   new_matched_df = pd.DataFrame.from_dict(new_matched_data, orient='index', dtype=np_str).reset_index()
-
-  if new_matched_df is None:
-    raise UnexpectedNoneError('Failed to cerate updated DataFrame')
+  new_matched_df = force_unwrap_optional(new_matched_df, 'Failed to create updated DataFrame')
 
   new_matched_df.rename(columns={'index': 'ekatte'}, inplace=True)
   file_name = f'{matched_tables_path}/{file_prefix_for_directory(matched_tables_path)}{date_suffix}.csv'
