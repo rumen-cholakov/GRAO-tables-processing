@@ -1,7 +1,7 @@
 beautifulsoup4==4.9.1
 html5lib==1.1
 isodate==0.6.0
-joblib==0.16.0
+joblib==0.17.0
 lxml==4.5.2
 matplotlib==3.3.2
 numpy==1.19.2
