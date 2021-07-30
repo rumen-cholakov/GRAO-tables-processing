@@ -60,7 +60,7 @@ def update_all_settlements(config: Configuration):
       error_logs.append(settlement_qid)
       print("An error occurred for item : " + settlement_qid)
 
-  if len(error_logs) > 0:
+  if error_logs:
     print("Summarizing failures for specific IDs")
     for error in error_logs:
       print("Error for : " + error)

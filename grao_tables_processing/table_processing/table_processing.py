@@ -55,15 +55,26 @@ def load_ekatte_dicts() -> Tuple[Dict[Any, Any], Dict[Any, Any]]:
 
 
 def make_settlements_data_tuple_list(data_frame_list: List[DataTuple]) -> List[Tuple[SettlementDataTuple, str]]:
-  sdt_list = list(map(lambda tup: (SettlementDataTuple(tup[0], tup[0][2]), tup[1]),
-                      map(lambda name: ((fix_names(name[0].strip()),
-                                         fix_names(name[1].strip()),
-                                         fix_names(name[2].split('.')[1].strip())),
-                                        name),
-                          set(chain.from_iterable(
-                              map(lambda dt: dt.data.index.values.tolist(),
-                                  data_frame_list))))))
-  return sdt_list
+  return list(
+      map(
+          lambda tup: (SettlementDataTuple(tup[0], tup[0][2]), tup[1]),
+          map(
+              lambda name: (
+                  (
+                      fix_names(name[0].strip()),
+                      fix_names(name[1].strip()),
+                      fix_names(name[2].split('.')[1].strip()),
+                  ),
+                  name,
+              ),
+              set(
+                  chain.from_iterable(
+                      map(
+                          lambda dt: dt.data.index.values.tolist(),
+                          data_frame_list,
+                      ))),
+          ),
+      ))
 
 
 def sleep_time_generator(random_seed: float) -> Generator[float, None, None]:
@@ -100,17 +111,21 @@ def update_data_frame(input_data: Tuple[DataTuple, Dict[Any, Any]]) -> DataTuple
   cols = df.columns
 
   def update_df(x: Tuple[str, str, str, int, int, str]) -> Tuple[str, str, str, int, int, Optional[str]]:
-    result = (x[0],
-              x[1],
-              x[2],
-              x[3],
-              x[4],
-              processed_sdts.get((fix_names(x[0].strip()),
-                                  fix_names(x[1].strip()),
-                                  fix_names(x[2].split('.')[1].strip())),
-                                 None))
-
-    return result
+    return (
+        x[0],
+        x[1],
+        x[2],
+        x[3],
+        x[4],
+        processed_sdts.get(
+            (
+                fix_names(x[0].strip()),
+                fix_names(x[1].strip()),
+                fix_names(x[2].split('.')[1].strip()),
+            ),
+            None,
+        ),
+    )
 
   df = pd.DataFrame([update_df(x) for x in df.to_numpy()])
 
