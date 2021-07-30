@@ -9,3 +9,4 @@ pandas==1.2.4
 requests>=2.24.0
 urllib3==1.26.4
 wikidataintegrator==0.8.17
+types-requests
