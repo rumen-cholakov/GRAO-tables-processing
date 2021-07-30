@@ -19,8 +19,7 @@ def find_ref_url(path_to_file: str, file_prefix: str, url_list: List[str]) -> st
     (lambda date_str: next(filter((lambda url: url.find(date_str) > -1), url_list))),
   ))
 
-  result = processing_pipline(path_to_file)
-  return result
+  return processing_pipline(path_to_file)
 
 
 def date_from_url(url: str) -> datetime:
